@@ -23,25 +23,39 @@ migrate = Migrate(app, db)
 CORS(app)
 
 # Sample route: Get properties
-@app.route('/api/properties', methods=['GET'])
-def get_properties():
-    with db.engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built, sqft FROM properties
-        """))
-        properties = [
-            {
-                "id": row.id,
-                "street": row.street,
-                "city": row.city,
-                "state": row.state,
-                "zip_code": row.zip_code,
-                "year_built": row.year_built,
-                "sqft": row.sqft
-            }
-            for row in result
-        ]
-        return jsonify(properties)
+@app.route('/api/properties', methods=['GET', 'POST'])
+def handle_properties():
+    if request.method == 'GET':
+        with db.engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT id, street, city, state, zip_code, year_built, sqft FROM properties
+            """))
+            properties = [
+                {
+                    "id": row.id,
+                    "street": row.street,
+                    "city": row.city,
+                    "state": row.state,
+                    "zip_code": row.zip_code,
+                    "year_built": row.year_built,
+                    "sqft": row.sqft
+                }
+                for row in result
+            ]
+            return jsonify(properties)
+    elif request.method == 'POST':
+        data = request.get_json()
+        new_property = Property(
+            street=data.get('street'),
+            city=data.get('city'),
+            state=data.get('state'),
+            zip_code=data.get('zip_code'),
+            year_built=data.get('year_built'),
+            sqft=data.get('sqft')
+        )
+        db.session.add(new_property)
+        db.session.commit()
+        return jsonify({'id': new_property.id}), 201
 
 @app.route('/api/properties/<int:property_id>', methods=['GET'])
 def get_property(property_id):
@@ -91,7 +105,7 @@ def delete_property(property_id):
             return jsonify({"message": "Property deleted", "id": deleted.id}), 200
         else:
             return jsonify({"error": "Property not found"}), 404
-        
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
