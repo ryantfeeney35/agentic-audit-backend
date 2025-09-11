@@ -64,7 +64,21 @@ def get_property(property_id):
             })
         else:
             return jsonify({"error": "Property not found"}), 404
-        
+
+# PUT /api/properties/<id>
+@app.route('/api/properties/<int:id>', methods=['PUT'])
+def update_property(id):
+    data = request.get_json()
+    stmt = text("""
+        UPDATE properties
+        SET street=:street, city=:city, state=:state, zip_code=:zip_code, year_built=:year_built, sqft=:sqft
+        WHERE id=:id
+    """)
+    with engine.connect() as conn:
+        conn.execute(stmt, {**data, "id": id})
+        conn.commit()
+    return jsonify({"message": "Property updated"})
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
