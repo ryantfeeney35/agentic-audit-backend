@@ -27,7 +27,7 @@ CORS(app)
 def get_properties():
     with db.engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built FROM properties
+            SELECT id, street, city, state, zip_code, year_built, sqft FROM properties
         """))
         properties = [
             {
