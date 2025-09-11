@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 from sqlalchemy import text
 from models import db
+from supabase import create_client, Client
 
 # Load environment variables first
 load_dotenv()
@@ -23,6 +24,12 @@ migrate = Migrate(app, db)
 CORS(app)
 
 from models import Property
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 # Sample route: Get properties
 @app.route('/api/properties', methods=['GET', 'POST'])
@@ -108,6 +115,37 @@ def delete_property(property_id):
         else:
             return jsonify({"error": "Property not found"}), 404
 
+@app.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
+def upload_utility_bill(property_id):
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    filename = f'property_{property_id}_{file.filename}'
+    file_content = file.read()
+
+    try:
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+            path=filename,
+            file=file_content,
+            file_options={"content-type": file.mimetype}
+        )
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+        # Save the public_url to the DB
+        property_obj = Property.query.get(property_id)
+        if not property_obj:
+            return jsonify({"error": "Property not found"}), 404
+
+        property_obj.utility_bill_url = public_url
+        db.session.commit()
+
+        return jsonify({'message': 'Uploaded and saved successfully', 'url': public_url}), 200
+
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Upload failed'}), 500
+    
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)

@@ -11,4 +11,5 @@ class Property(db.Model):
     state = db.Column(db.String)
     zip_code = db.Column(db.String)
     year_built = db.Column(db.Integer)
-    sqft = db.Column(db.Integer, nullable=True) 
+    sqft = db.Column(db.Integer, nullable=True)
+    utility_bill_url = db.Column(db.String, nullable=True)
