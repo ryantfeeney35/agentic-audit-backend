@@ -1,2 +1,5 @@
 flask
 flask_cors
+sqlalchemy
+python-dotenv
+psycopg2-binary
