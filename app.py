@@ -74,11 +74,24 @@ def update_property(id):
         SET street=:street, city=:city, state=:state, zip_code=:zip_code, year_built=:year_built, sqft=:sqft
         WHERE id=:id
     """)
-    with engine.connect() as conn:
+    with db.engine.connect() as conn:
         conn.execute(stmt, {**data, "id": id})
         conn.commit()
     return jsonify({"message": "Property updated"})
 
+@app.route('/api/properties/<int:property_id>', methods=['DELETE'])
+def delete_property(property_id):
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM properties WHERE id = :id RETURNING id"),
+            {"id": property_id}
+        )
+        deleted = result.fetchone()
+        if deleted:
+            return jsonify({"message": "Property deleted", "id": deleted.id}), 200
+        else:
+            return jsonify({"error": "Property not found"}), 404
+        
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
