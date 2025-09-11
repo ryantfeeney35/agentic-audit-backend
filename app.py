@@ -43,6 +43,28 @@ def get_properties():
         ]
         return jsonify(properties)
 
+@app.route('/api/properties/<int:property_id>', methods=['GET'])
+def get_property(property_id):
+    with db.engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT id, street, city, state, zip_code, year_built, sqft
+            FROM properties
+            WHERE id = :id
+        """), {"id": property_id}).fetchone()
+
+        if result:
+            return jsonify({
+                "id": result.id,
+                "street": result.street,
+                "city": result.city,
+                "state": result.state,
+                "zip_code": result.zip_code,
+                "year_built": result.year_built,
+                "sqft": result.sqft
+            })
+        else:
+            return jsonify({"error": "Property not found"}), 404
+        
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
