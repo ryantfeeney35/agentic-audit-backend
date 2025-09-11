@@ -22,6 +22,8 @@ db.init_app(app)
 migrate = Migrate(app, db)
 CORS(app)
 
+from models import Property
+
 # Sample route: Get properties
 @app.route('/api/properties', methods=['GET', 'POST'])
 def handle_properties():
