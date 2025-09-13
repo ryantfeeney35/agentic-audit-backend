@@ -217,6 +217,18 @@ def get_audit_by_property(property_id):
         return jsonify({"error": "No audit found"}), 404
 
 # ---------------------- AUDIT STEPS ----------------------
+@app.route('/api/audits/<int:audit_id>/steps', methods=['GET'])
+def get_audit_steps(audit_id):
+    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
+    return jsonify([
+        {
+            "id": step.id,
+            "label": step.label,
+            "step_type": step.step_type,
+            "is_completed": step.is_completed
+        } for step in steps
+    ])
+
 @app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
 def add_audit_step(audit_id):
     data = request.get_json()
