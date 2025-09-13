@@ -50,14 +50,16 @@ class AuditStep(db.Model):
     findings = relationship('AuditFinding', back_populates='step', cascade="all, delete-orphan")
 
 
+    media = db.relationship('AuditMedia', backref='audit', lazy=True)
+
 class AuditMedia(db.Model):
     __tablename__ = 'audit_media'
     id = db.Column(db.Integer, primary_key=True)
-    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete='CASCADE'), nullable=False)
-    file_url = db.Column(db.String, nullable=False)
-    file_name = db.Column(db.String, nullable=True)
-    media_type = db.Column(db.String, default='photo')  # e.g., 'photo', 'video', 'infrared'
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id'), nullable=False)  # ✅ Add this
+    step_type = db.Column(db.String, nullable=False)  # e.g. 'exterior', 'attic', etc.
+    side = db.Column(db.String, nullable=True)        # e.g. 'North', 'South'
+    media_url = db.Column(db.String, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
     step = relationship('AuditStep', back_populates='media')
