@@ -7,6 +7,8 @@ import os
 from sqlalchemy import text
 from models import db
 from supabase import create_client, Client
+from models import Audit, AuditStep, AuditMedia, AuditFinding
+from datetime import datetime
 
 # Load environment variables first
 load_dotenv()
@@ -117,7 +119,6 @@ def delete_property(property_id):
             return jsonify({"error": "Property not found"}), 404
 
 @app.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
-@app.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
 def upload_utility_bill(property_id):
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
@@ -155,6 +156,130 @@ def upload_utility_bill(property_id):
     except Exception as e:
         print(e)
         return jsonify({'error': 'Upload failed'}), 500
+
+# ---------------------- AUDITS ----------------------
+@app.route('/api/properties/<int:property_id>/audits', methods=['POST'])
+def create_audit(property_id):
+    data = request.get_json()
+    audit = Audit(
+        property_id=property_id,
+        date=datetime.strptime(data.get('date'), '%Y-%m-%d') if data.get('date') else datetime.utcnow(),
+        auditor_name=data.get('auditor_name'),
+        notes=data.get('notes')
+    )
+    db.session.add(audit)
+    db.session.commit()
+    return jsonify({"id": audit.id}), 201
+
+@app.route('/api/audits/<int:audit_id>', methods=['GET'])
+def get_audit(audit_id):
+    audit = Audit.query.get(audit_id)
+    if not audit:
+        return jsonify({"error": "Audit not found"}), 404
+
+    return jsonify({
+        "id": audit.id,
+        "property_id": audit.property_id,
+        "date": audit.date.strftime('%Y-%m-%d'),
+        "auditor_name": audit.auditor_name,
+        "notes": audit.notes,
+        "steps": [
+            {
+                "id": step.id,
+                "step_type": step.step_type,
+                "label": step.label,
+                "is_completed": step.is_completed
+            }
+            for step in audit.steps
+        ]
+    })
+
+@app.route('/api/properties/<int:property_id>/audit', methods=['GET'])
+def get_audit_by_property(property_id):
+    audit = Audit.query.filter_by(property_id=property_id).first()
+    if audit:
+        return jsonify({
+            "id": audit.id,
+            "property_id": audit.property_id,
+            "date": audit.date.isoformat()
+        })
+    else:
+        return jsonify({"error": "No audit found"}), 404
+
+# ---------------------- AUDIT STEPS ----------------------
+@app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
+def add_audit_step(audit_id):
+    data = request.get_json()
+    step = AuditStep(
+        audit_id=audit_id,
+        step_type=data.get('step_type'),
+        label=data.get('label'),
+        is_completed=data.get('is_completed', False),
+        notes=data.get('notes')
+    )
+    db.session.add(step)
+    db.session.commit()
+    return jsonify({"id": step.id}), 201
+
+@app.route('/api/steps/<int:step_id>', methods=['PATCH'])
+def update_step_status(step_id):
+    data = request.get_json()
+    step = AuditStep.query.get(step_id)
+    if not step:
+        return jsonify({"error": "Step not found"}), 404
+
+    step.is_completed = data.get('is_completed', step.is_completed)
+    db.session.commit()
+    return jsonify({"message": "Step updated"})
+
+# ---------------------- AUDIT MEDIA ----------------------
+@app.route('/api/steps/<int:step_id>/upload', methods=['POST'])
+def upload_step_media(step_id):
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    filename = f'step_{step_id}_{file.filename}'
+    file_content = file.read()
+
+    try:
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+            path=filename,
+            file=file_content,
+            file_options={"content-type": file.mimetype}
+        )
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+        media = AuditMedia(
+            step_id=step_id,
+            file_url=public_url,
+            file_name=file.filename,
+            media_type=request.form.get('media_type', 'photo')
+        )
+        db.session.add(media)
+        db.session.commit()
+
+        return jsonify({"url": public_url}), 201
+
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Upload failed'}), 500
+
+# ---------------------- AUDIT FINDINGS ----------------------
+@app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
+def add_finding(step_id):
+    data = request.get_json()
+    finding = AuditFinding(
+        step_id=step_id,
+        title=data.get('title'),
+        description=data.get('description'),
+        recommendation=data.get('recommendation'),
+        severity=data.get('severity'),
+        source=data.get('source')
+    )
+    db.session.add(finding)
+    db.session.commit()
+    return jsonify({"id": finding.id}), 201
     
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
