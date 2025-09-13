@@ -50,12 +50,11 @@ class AuditStep(db.Model):
     findings = relationship('AuditFinding', back_populates='step', cascade="all, delete-orphan")
 
 
-    media = db.relationship('AuditMedia', backref='audit', lazy=True)
-
 class AuditMedia(db.Model):
     __tablename__ = 'audit_media'
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id'), nullable=False)  # ✅ Add this
+    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id'), nullable=False)
+    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id'), nullable=True)  # ✅ Added FK
     step_type = db.Column(db.String, nullable=False)  # e.g. 'exterior', 'attic', etc.
     side = db.Column(db.String, nullable=True)        # e.g. 'North', 'South'
     media_url = db.Column(db.String, nullable=True)
