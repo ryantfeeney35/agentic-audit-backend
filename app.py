@@ -275,6 +275,18 @@ def upload_step_media(step_id):
         print(e)
         return jsonify({'error': 'Upload failed'}), 500
 
+@app.route('/api/audits/<int:audit_id>/media', methods=['GET'])
+def get_audit_media(audit_id):
+    media = AuditMedia.query.filter_by(audit_id=audit_id).all()
+    return jsonify([{
+        "id": m.id,
+        "audit_id": m.audit_id,
+        "step_type": m.step_type,
+        "side": m.side,
+        "media_url": m.media_url,
+        "created_at": m.created_at.isoformat()
+    } for m in media])
+
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
 def add_finding(step_id):
