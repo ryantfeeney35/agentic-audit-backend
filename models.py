@@ -13,3 +13,4 @@ class Property(db.Model):
     year_built = db.Column(db.Integer)
     sqft = db.Column(db.Integer, nullable=True)
     utility_bill_url = db.Column(db.String, nullable=True)
+    utility_bill_name = db.Column(db.String, nullable=True)

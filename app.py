@@ -83,7 +83,8 @@ def get_property(property_id):
                 "state": result.state,
                 "zip_code": result.zip_code,
                 "year_built": result.year_built,
-                "sqft": result.sqft
+                "sqft": result.sqft,
+                "utility_bill_name": result.utility_bill_name  # ✅ NEW 
             })
         else:
             return jsonify({"error": "Property not found"}), 404
@@ -116,31 +117,40 @@ def delete_property(property_id):
             return jsonify({"error": "Property not found"}), 404
 
 @app.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
+@app.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
 def upload_utility_bill(property_id):
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
 
     file = request.files['file']
-    filename = f'property_{property_id}_{file.filename}'
+    original_filename = file.filename
+    filename = f'property_{property_id}_{original_filename}'
     file_content = file.read()
 
     try:
+        # Upload to Supabase Storage
         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
         )
+
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
-        # Save the public_url to the DB
+        # Save URL + file name in DB
         property_obj = Property.query.get(property_id)
         if not property_obj:
             return jsonify({"error": "Property not found"}), 404
 
         property_obj.utility_bill_url = public_url
+        property_obj.utility_bill_name = original_filename  # ✅ NEW
         db.session.commit()
 
-        return jsonify({'message': 'Uploaded and saved successfully', 'url': public_url}), 200
+        return jsonify({
+            'message': 'Uploaded and saved successfully',
+            'url': public_url,
+            'fileName': original_filename
+        }), 200
 
     except Exception as e:
         print(e)
