@@ -70,7 +70,7 @@ def handle_properties():
 def get_property(property_id):
     with db.engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built, sqft
+            SELECT id, street, city, state, zip_code, year_built, sqft, utility_bill_name
             FROM properties
             WHERE id = :id
         """), {"id": property_id}).fetchone()
