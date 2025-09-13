@@ -159,17 +159,27 @@ def upload_utility_bill(property_id):
 
 # ---------------------- AUDITS ----------------------
 @app.route('/api/properties/<int:property_id>/audits', methods=['POST'])
-def create_audit(property_id):
+@app.route('/api/audits', methods=['POST'])
+def create_audit():
     data = request.get_json()
-    audit = Audit(
-        property_id=property_id,
-        date=datetime.strptime(data.get('date'), '%Y-%m-%d') if data.get('date') else datetime.utcnow(),
-        auditor_name=data.get('auditor_name'),
-        notes=data.get('notes')
-    )
-    db.session.add(audit)
-    db.session.commit()
-    return jsonify({"id": audit.id}), 201
+    property_id = data.get("property_id")
+
+    if not property_id:
+        return jsonify({"error": "Missing property_id"}), 400
+
+    try:
+        new_audit = Audit(property_id=property_id)
+        db.session.add(new_audit)
+        db.session.commit()
+
+        return jsonify({
+            "id": new_audit.id,
+            "property_id": new_audit.property_id,
+            "date": new_audit.date.isoformat()
+        }), 201
+    except Exception as e:
+        print(f"❌ Error creating audit: {e}")
+        return jsonify({"error": "Failed to create audit"}), 500
 
 @app.route('/api/audits/<int:audit_id>', methods=['GET'])
 def get_audit(audit_id):
