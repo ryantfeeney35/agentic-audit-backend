@@ -132,10 +132,12 @@ def upload_utility_bill(property_id):
 
     try:
         # Upload to Supabase Storage
+        content_type = file.mimetype or 'application/octet-stream'
+
         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
-            file_options={"content-type": file.mimetype}
+            file_options={"content-type": str(content_type)}
         )
 
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
@@ -318,10 +320,11 @@ def upload_step_media(step_id):
     file_content = file.read()
 
     try:
+        content_type = file.mimetype or 'application/octet-stream'
         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
-            file_options={"content-type": file.mimetype}
+            file_options={"content-type": str(content_type)}
         )
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
@@ -376,10 +379,11 @@ def upload_media_by_step_label(audit_id, step_label):
 
     # Upload to Supabase
     try:
+        content_type = file.mimetype or 'application/octet-stream'
         supabase.storage.from_(SUPABASE_AUDIT_BUCKET).upload(
             path=filename,
             file=file_content,
-            file_options={"content-type": file.mimetype, "upsert": True}
+            file_options={"content-type": str(content_type), "upsert": True}
         )
 
         # Store only the relative path
