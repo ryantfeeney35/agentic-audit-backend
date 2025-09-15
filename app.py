@@ -31,6 +31,7 @@ from models import Property
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
+SUPABASE_AUDIT_BUCKET_NAME = os.getenv("SUPABASE_AUDIT_BUCKET_NAME")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -368,12 +369,13 @@ def upload_media_by_step_label(audit_id, step_label):
 
     # Upload to Supabase
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+
+        supabase.storage.from_(SUPABASE_AUDIT_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
         )
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_AUDIT_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
             audit_id=audit_id,
