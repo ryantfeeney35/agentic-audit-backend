@@ -311,12 +311,12 @@ def upload_step_media(step_id):
     file_content = file.read()
 
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+        supabase.storage.from_(SUPABASE_AUDIT_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
         )
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_AUDIT_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
             audit_id=audit_id,
