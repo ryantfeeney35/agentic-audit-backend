@@ -250,6 +250,7 @@ def create_or_update_audit_step(audit_id):
     step_type = data.get('step_type')
     label = data.get('label')
     is_completed = data.get('is_completed', False)
+    is_not_accessible = data.get('is_not_accessible', False)
 
     existing_step = AuditStep.query.filter_by(
         audit_id=audit_id,
@@ -259,6 +260,7 @@ def create_or_update_audit_step(audit_id):
 
     if existing_step:
         existing_step.is_completed = is_completed
+        existing_step.is_not_accessible = is_not_accessible
         db.session.commit()
         return jsonify({"message": "Step updated", "id": existing_step.id}), 200
     else:
@@ -266,7 +268,8 @@ def create_or_update_audit_step(audit_id):
             audit_id=audit_id,
             step_type=step_type,
             label=label,
-            is_completed=is_completed
+            is_completed=is_completed,
+            is_not_accessible=is_not_accessible
         )
         db.session.add(new_step)
         db.session.commit()
@@ -296,7 +299,8 @@ def get_media_by_step_label(audit_id, step_label):
             "media_url": m.media_url,
             "file_name": m.file_name,
             "media_type": m.media_type,
-            "created_at": m.created_at.isoformat()
+            "created_at": m.created_at.isoformat(),
+            "not_accessible": step.not_accessible
         } for m in media_items
     ])
 # ---------------------- AUDIT MEDIA ----------------------
