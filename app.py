@@ -244,28 +244,32 @@ def add_audit_step(audit_id):
     return jsonify({"id": step.id}), 201
 
 @app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
-def complete_audit_step(audit_id):
+def create_or_update_audit_step(audit_id):
     data = request.get_json()
-    step_type = data.get("step_type")
-    label = data.get("label")
+    step_type = data.get('step_type')
+    label = data.get('label')
+    is_completed = data.get('is_completed', False)
 
-    if not step_type or not label:
-        return jsonify({"error": "Missing step_type or label"}), 400
+    existing_step = AuditStep.query.filter_by(
+        audit_id=audit_id,
+        step_type=step_type,
+        label=label
+    ).first()
 
-    step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
-    if not step:
-        step = AuditStep(
+    if existing_step:
+        existing_step.is_completed = is_completed
+        db.session.commit()
+        return jsonify({"message": "Step updated", "id": existing_step.id}), 200
+    else:
+        new_step = AuditStep(
             audit_id=audit_id,
             step_type=step_type,
             label=label,
-            is_completed=True
+            is_completed=is_completed
         )
-        db.session.add(step)
-    else:
-        step.is_completed = True
-
-    db.session.commit()
-    return jsonify({"message": "Step marked complete", "step_id": step.id}), 200
+        db.session.add(new_step)
+        db.session.commit()
+        return jsonify({"message": "Step created", "id": new_step.id}), 201
 
 @app.route('/api/steps/<int:step_id>', methods=['PATCH'])
 def update_step_status(step_id):
