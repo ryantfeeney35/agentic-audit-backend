@@ -42,6 +42,7 @@ class AuditStep(db.Model):
     step_type = db.Column(db.String, nullable=False)  # e.g., 'exterior', 'attic'
     label = db.Column(db.String, nullable=True)       # e.g., 'North Side', 'Attic Access Hatch'
     is_completed = db.Column(db.Boolean, default=False)
+    not_accessible = db.Column(db.Boolean, default=False)
     notes = db.Column(db.Text, nullable=True)
 
     # Relationships
