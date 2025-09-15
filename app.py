@@ -283,6 +283,22 @@ def update_step_status(step_id):
     db.session.commit()
     return jsonify({"message": "Step updated"})
 
+@app.route('/api/audits/<int:audit_id>/steps/<string:step_label>/media', methods=['GET'])
+def get_media_by_step_label(audit_id, step_label):
+    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
+    if not step:
+        return jsonify([])
+
+    media_items = AuditMedia.query.filter_by(step_id=step.id).all()
+    return jsonify([
+        {
+            "id": m.id,
+            "media_url": m.media_url,
+            "file_name": m.file_name,
+            "media_type": m.media_type,
+            "created_at": m.created_at.isoformat()
+        } for m in media_items
+    ])
 # ---------------------- AUDIT MEDIA ----------------------
 @app.route('/api/steps/<int:step_id>/upload', methods=['POST'])
 def upload_step_media(step_id):
