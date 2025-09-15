@@ -302,10 +302,13 @@ def upload_step_media(step_id):
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
-            step_id=step_id,
+            audit_id=audit_id,
+            step_id=step.id,
+            step_type=step.step_type,
+            side=step.label.replace(" Side", ""),
             media_url=public_url,
             file_name=file.filename,
-            media_type=request.form.get('media_type', 'photo')
+            media_type=media_type
         )
         db.session.add(media)
         db.session.commit()
@@ -357,7 +360,10 @@ def upload_media_by_step_label(audit_id, step_label):
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
+            audit_id=audit_id,
             step_id=step.id,
+            step_type=step.step_type,
+            side=step.label.replace(" Side", ""),
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type
