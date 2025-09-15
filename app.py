@@ -9,6 +9,7 @@ from models import db
 from supabase import create_client, Client
 from models import Audit, AuditStep, AuditMedia, AuditFinding
 from datetime import datetime
+from werkzeug.utils import secure_filename
 
 # Load environment variables first
 load_dotenv()
@@ -326,6 +327,53 @@ def get_audit_media(audit_id):
         "media_url": m.media_url,
         "created_at": m.created_at.isoformat()
     } for m in media])
+
+@app.route('/api/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
+def upload_media_by_step_label(audit_id, step_label):
+    step_type = request.form.get('step_type', 'exterior')
+    media_type = request.form.get('media_type', 'photo')
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    filename = secure_filename(f"{audit_id}_{step_label}_{file.filename}")
+    file_content = file.read()
+
+    # Find or create the step
+    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label, step_type=step_type).first()
+    if not step:
+        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
+        db.session.add(step)
+        db.session.commit()
+
+    # Upload to Supabase
+    try:
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+            path=filename,
+            file=file_content,
+            file_options={"content-type": file.mimetype}
+        )
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+        media = AuditMedia(
+            step_id=step.id,
+            file_url=public_url,
+            file_name=file.filename,
+            media_type=media_type
+        )
+        db.session.add(media)
+        db.session.commit()
+
+        return jsonify({
+            "message": "Uploaded",
+            "media_url": public_url,
+            "step_id": step.id
+        }), 201
+
+    except Exception as e:
+        print(f"❌ Upload failed: {e}")
+        return jsonify({'error': 'Upload failed'}), 500
 
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
