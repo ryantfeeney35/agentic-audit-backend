@@ -54,10 +54,12 @@ class AuditMedia(db.Model):
     __tablename__ = 'audit_media'
     id = db.Column(db.Integer, primary_key=True)
     audit_id = db.Column(db.Integer, db.ForeignKey('audits.id'), nullable=False)
-    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id'), nullable=True)  # ✅ Added FK
-    step_type = db.Column(db.String, nullable=False)  # e.g. 'exterior', 'attic', etc.
-    side = db.Column(db.String, nullable=True)        # e.g. 'North', 'South'
+    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id'), nullable=True)
+    step_type = db.Column(db.String, nullable=False)
+    side = db.Column(db.String, nullable=True)
     media_url = db.Column(db.String, nullable=True)
+    file_name = db.Column(db.String, nullable=True)  # ✅ ADD THIS LINE
+    media_type = db.Column(db.String, nullable=True)  # e.g., 'photo', 'video'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
