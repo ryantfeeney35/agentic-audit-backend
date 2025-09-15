@@ -303,7 +303,7 @@ def upload_step_media(step_id):
 
         media = AuditMedia(
             step_id=step_id,
-            file_url=public_url,
+            media_url=public_url,
             file_name=file.filename,
             media_type=request.form.get('media_type', 'photo')
         )
@@ -358,7 +358,7 @@ def upload_media_by_step_label(audit_id, step_label):
 
         media = AuditMedia(
             step_id=step.id,
-            file_url=public_url,
+            media_url=public_url,
             file_name=file.filename,
             media_type=media_type
         )
