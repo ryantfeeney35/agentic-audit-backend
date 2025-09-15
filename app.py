@@ -31,6 +31,7 @@ from models import Property
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
+SUPABASE_AUDIT_BUCKET = os.getenv("SUPABASE_AUDIT_BUCKET_NAME", "audit-media")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -290,15 +291,22 @@ def get_media_by_step_label(audit_id, step_label):
         return jsonify([])
 
     media_items = AuditMedia.query.filter_by(step_id=step.id).all()
-    return jsonify([
-        {
+    media_list = []
+
+    for m in media_items:
+        signed = supabase.storage.from_(SUPABASE_AUDIT_BUCKET).create_signed_url(
+            path=m.media_url.split(f"/{SUPABASE_AUDIT_BUCKET}/")[-1],
+            expires_in=60 * 60 * 24 * 7  # 7 days
+        )
+        media_list.append({
             "id": m.id,
-            "media_url": m.media_url,
+            "signed_url": signed.get("signedURL"),
             "file_name": m.file_name,
             "media_type": m.media_type,
             "created_at": m.created_at.isoformat()
-        } for m in media_items
-    ])
+        })
+
+    return jsonify(media_list)
 # ---------------------- AUDIT MEDIA ----------------------
 @app.route('/api/steps/<int:step_id>/upload', methods=['POST'])
 def upload_step_media(step_id):
@@ -368,28 +376,34 @@ def upload_media_by_step_label(audit_id, step_label):
 
     # Upload to Supabase
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+        supabase.storage.from_(SUPABASE_AUDIT_BUCKET).upload(
             path=filename,
             file=file_content,
-            file_options={"content-type": file.mimetype}
+            file_options={"content-type": file.mimetype, "upsert": True}
         )
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
+        # Store only the relative path
         media = AuditMedia(
             audit_id=audit_id,
             step_id=step.id,
             step_type=step.step_type,
             side=step.label.replace(" Side", ""),
-            media_url=public_url,
+            media_url=f"{filename}",
             file_name=file.filename,
             media_type=media_type
         )
         db.session.add(media)
         db.session.commit()
 
+        # Signed URL response
+        signed = supabase.storage.from_(SUPABASE_AUDIT_BUCKET).create_signed_url(
+            path=filename,
+            expires_in=60 * 60 * 24 * 7
+        )
+
         return jsonify({
             "message": "Uploaded",
-            "media_url": public_url,
+            "signed_url": signed.get("signedURL"),
             "step_id": step.id
         }), 201
 
