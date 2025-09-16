@@ -366,7 +366,17 @@ def upload_media_by_step_label(audit_id, step_label):
     file_content = file.read()
 
     # Find or create the step
-    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label, step_type=step_type).first()
+    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
+    if step:
+        # ✅ Fix step_type if previously created wrong
+        if step.step_type != step_type:
+            step.step_type = step_type
+            db.session.commit()
+    else:
+        # Create new step with correct step_type
+        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
+        db.session.add(step)
+        db.session.commit()
     if not step:
         step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
         db.session.add(step)
