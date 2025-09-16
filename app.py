@@ -220,15 +220,28 @@ def get_audit_by_property(property_id):
 @app.route('/api/audits/<int:audit_id>/steps', methods=['GET'])
 def get_audit_steps(audit_id):
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
-    return jsonify([
-        {
+    result = []
+
+    for step in steps:
+        media_items = AuditMedia.query.filter_by(step_id=step.id).all()
+        media = [{
+            "id": m.id,
+            "media_url": m.media_url,
+            "file_name": m.file_name,
+            "media_type": m.media_type,
+            "created_at": m.created_at.isoformat()
+        } for m in media_items]
+
+        result.append({
             "id": step.id,
             "label": step.label,
             "step_type": step.step_type,
             "is_completed": step.is_completed,
-            "not_accessible": step.not_accessible
-        } for step in steps
-    ])
+            "not_accessible": step.not_accessible,
+            "media": media  # ✅ Add this
+        })
+
+    return jsonify(result)
 
 @app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
