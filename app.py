@@ -316,7 +316,7 @@ def upload_step_media(step_id):
     file_content = file.read()
 
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
@@ -374,7 +374,7 @@ def upload_media_by_step_label(audit_id, step_label):
 
     # Upload to Supabase
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
