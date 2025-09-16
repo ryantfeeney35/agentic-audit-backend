@@ -355,7 +355,15 @@ def get_audit_media(audit_id):
 
 @app.route('/api/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 def upload_media_by_step_label(audit_id, step_label):
-    step_type = request.form.get('step_type', 'exterior')
+    # Parse step_type from the form data manually
+    if request.content_type.startswith('multipart/form-data'):
+        step_type = request.form.get('step_type')
+    else:
+        step_type = None
+
+    if not step_type:
+        print("⚠️ No step_type provided, defaulting to 'exterior'")
+        step_type = 'exterior'
     media_type = request.form.get('media_type', 'photo')
 
     if 'file' not in request.files:
