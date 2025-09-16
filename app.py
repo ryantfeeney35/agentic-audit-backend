@@ -249,9 +249,14 @@ def create_or_update_audit_step(audit_id):
     data = request.get_json()
     step_type = data.get('step_type')
     label = data.get('label')
-    is_completed = data.get('is_completed', False)
-    is_not_accessible = data.get('is_not_accessible', False)
+    is_completed = data.get('is_completed')
+    is_not_accessible = data.get('is_not_accessible')
+    notes = data.get('notes')
 
+    if not step_type or not label:
+        return jsonify({'error': 'Missing step_type or label'}), 400
+
+    # Check if the step already exists
     existing_step = AuditStep.query.filter_by(
         audit_id=audit_id,
         step_type=step_type,
@@ -259,17 +264,26 @@ def create_or_update_audit_step(audit_id):
     ).first()
 
     if existing_step:
-        existing_step.is_completed = is_completed
-        existing_step.is_not_accessible = is_not_accessible
+        # Update existing values only if provided
+        if is_completed is not None:
+            existing_step.is_completed = is_completed
+        if is_not_accessible is not None:
+            existing_step.is_not_accessible = is_not_accessible
+        if notes is not None:
+            existing_step.notes = notes
+
         db.session.commit()
         return jsonify({"message": "Step updated", "id": existing_step.id}), 200
+
     else:
+        # Create new step
         new_step = AuditStep(
             audit_id=audit_id,
             step_type=step_type,
             label=label,
-            is_completed=is_completed,
-            is_not_accessible=is_not_accessible
+            is_completed=is_completed if is_completed is not None else False,
+            is_not_accessible=is_not_accessible if is_not_accessible is not None else False,
+            notes=notes
         )
         db.session.add(new_step)
         db.session.commit()
