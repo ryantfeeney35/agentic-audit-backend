@@ -390,6 +390,25 @@ def upload_media_by_step_label(audit_id, step_label):
         print(f"❌ Upload failed: {e}")
         return jsonify({'error': 'Upload failed'}), 500
 
+# ---------------------- AUDIT CHAT ----------------------
+@app.route('/api/agent-chat', methods=['POST'])
+def agent_chat():
+    data = request.get_json()
+    messages = data.get('messages', [])
+
+    # Get the latest user message
+    user_message = messages[-1]['text'] if messages else "Hi"
+
+    # 🤖 Simple placeholder logic — swap this with OpenAI or your agent
+    if "insulation" in user_message.lower():
+        reply = "Great! Do you know what type of insulation you currently have?"
+    elif "yes" in user_message.lower():
+        reply = "Perfect. Could you upload a photo of the attic insulation?"
+    else:
+        reply = "Could you clarify your goal—are you trying to reduce bills or increase comfort?"
+
+    return jsonify({"reply": reply})
+
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
 def add_finding(step_id):
