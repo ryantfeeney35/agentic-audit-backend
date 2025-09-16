@@ -34,7 +34,7 @@ SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# Sample route: Get properties
+# Properties Endpoints
 @app.route('/api/properties', methods=['GET', 'POST'])
 def handle_properties():
     if request.method == 'GET':
@@ -92,7 +92,6 @@ def get_property(property_id):
         else:
             return jsonify({"error": "Property not found"}), 404
 
-# PUT /api/properties/<id>
 @app.route('/api/properties/<int:id>', methods=['PUT'])
 def update_property(id):
     data = request.get_json()
@@ -226,23 +225,10 @@ def get_audit_steps(audit_id):
             "id": step.id,
             "label": step.label,
             "step_type": step.step_type,
-            "is_completed": step.is_completed
+            "is_completed": step.is_completed,
+            "is_not_accessible": step.is_not_accessible
         } for step in steps
     ])
-
-@app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
-def add_audit_step(audit_id):
-    data = request.get_json()
-    step = AuditStep(
-        audit_id=audit_id,
-        step_type=data.get('step_type'),
-        label=data.get('label'),
-        is_completed=data.get('is_completed', False),
-        notes=data.get('notes')
-    )
-    db.session.add(step)
-    db.session.commit()
-    return jsonify({"id": step.id}), 201
 
 @app.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
@@ -288,17 +274,6 @@ def create_or_update_audit_step(audit_id):
         db.session.add(new_step)
         db.session.commit()
         return jsonify({"message": "Step created", "id": new_step.id}), 201
-
-@app.route('/api/steps/<int:step_id>', methods=['PATCH'])
-def update_step_status(step_id):
-    data = request.get_json()
-    step = AuditStep.query.get(step_id)
-    if not step:
-        return jsonify({"error": "Step not found"}), 404
-
-    step.is_completed = data.get('is_completed', step.is_completed)
-    db.session.commit()
-    return jsonify({"message": "Step updated"})
 
 @app.route('/api/audits/<int:audit_id>/steps/<string:step_label>/media', methods=['GET'])
 def get_media_by_step_label(audit_id, step_label):
