@@ -226,7 +226,7 @@ def get_audit_steps(audit_id):
             "label": step.label,
             "step_type": step.step_type,
             "is_completed": step.is_completed,
-            "is_not_accessible": step.is_not_accessible
+            "not_accessible": step.not_accessible
         } for step in steps
     ])
 
@@ -236,7 +236,7 @@ def create_or_update_audit_step(audit_id):
     step_type = data.get('step_type')
     label = data.get('label')
     is_completed = data.get('is_completed')
-    is_not_accessible = data.get('is_not_accessible')
+    not_accessible = data.get('not_accessible')
     notes = data.get('notes')
 
     if not step_type or not label:
@@ -253,8 +253,8 @@ def create_or_update_audit_step(audit_id):
         # Update existing values only if provided
         if is_completed is not None:
             existing_step.is_completed = is_completed
-        if is_not_accessible is not None:
-            existing_step.is_not_accessible = is_not_accessible
+        if not_accessible is not None:
+            existing_step.not_accessible = not_accessible
         if notes is not None:
             existing_step.notes = notes
 
@@ -268,7 +268,7 @@ def create_or_update_audit_step(audit_id):
             step_type=step_type,
             label=label,
             is_completed=is_completed if is_completed is not None else False,
-            is_not_accessible=is_not_accessible if is_not_accessible is not None else False,
+            not_accessible=not_accessible if not_accessible is not None else False,
             notes=notes
         )
         db.session.add(new_step)
