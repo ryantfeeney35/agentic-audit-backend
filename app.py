@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Blueprint,Flask, jsonify, request
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -10,6 +10,7 @@ from supabase import create_client, Client
 from models import Audit, AuditStep, AuditMedia, AuditFinding
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from openai import OpenAI
 
 # Load environment variables first
 load_dotenv()
@@ -422,23 +423,57 @@ def upload_media_by_step_label(audit_id, step_label):
         return jsonify({'error': 'Upload failed'}), 500
 
 # ---------------------- AUDIT CHAT ----------------------
-@app.route('/api/agent-chat', methods=['POST'])
-def agent_chat():
-    data = request.get_json()
-    messages = data.get('messages', [])
+agent = Blueprint('agent', __name__)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    # Get the latest user message
-    user_message = messages[-1]['text'] if messages else "Hi"
+@agent.route('/api/agent-review', methods=['POST'])
+def agent_review():
+    data = request.json
+    messages = data.get("messages", [])
+    thickness = data.get("thickness", {})
+    media = data.get("media", {})
 
-    # 🤖 Simple placeholder logic — swap this with OpenAI or your agent
-    if "insulation" in user_message.lower():
-        reply = "Great! Do you know what type of insulation you currently have?"
-    elif "yes" in user_message.lower():
-        reply = "Perfect. Could you upload a photo of the attic insulation?"
-    else:
-        reply = "Could you clarify your goal—are you trying to reduce bills or increase comfort?"
+    # Step 1: Initial system prompt
+    system_prompt = {
+        "role": "system",
+        "content": (
+            "You are a building science expert evaluating insulation quality "
+            "based on images and thickness measurements. Ask any follow-up questions needed "
+            "to determine if insulation upgrades are warranted."
+        )
+    }
 
-    return jsonify({"reply": reply})
+    # Step 2: Add insulation summary if not already included
+    if not any("insulation" in m.get("content", "").lower() for m in messages):
+        insulation_summary = "\n".join([
+            f"{k.replace('_', ' ').title()}: {v or 'unknown'} inches"
+            for k, v in thickness.items()
+        ])
+        photo_summary = "\n".join([
+            f"{k.replace('_', ' ').title()}: {len(v)} photo(s)" 
+            for k, v in media.items() if v
+        ])
+        user_summary = {
+            "role": "user",
+            "content": f"Insulation thickness:\n{insulation_summary}\n\nUploaded photos:\n{photo_summary}"
+        }
+        messages.insert(0, user_summary)
+
+    # Step 3: Call OpenAI
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[system_prompt] + messages,
+            temperature=0.7,
+        )
+
+        reply = response.choices[0].message.content.strip()
+
+        return jsonify({"reply": reply})
+
+    except Exception as e:
+        print("❌ Error generating agent review:", e)
+        return jsonify({"error": "Failed to generate agent reply"}), 500
 
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
