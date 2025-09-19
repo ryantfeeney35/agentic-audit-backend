@@ -237,11 +237,11 @@ def handle_interview(audit_id):
     try:
         print("🔍 Transcribing with OpenAI Whisper...")
         with open(temp_path, "rb") as f:
-            transcript_resp = openai.Audio.transcribe(
+            transcript_resp = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f
             )
-        transcript = transcript_resp['text']
+        transcript = transcript_resp.text
         print("✅ Transcript received:", transcript[:100])
     except Exception as e:
         print("❌ Transcription failed:", str(e))
