@@ -249,16 +249,29 @@ def handle_interview(audit_id):
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
     # Step 2: Generate summary from transcript
+    print("🧠 Generating summary from transcript...")
+    print("Transcript length:", len(transcript))
+    print("Transcript preview:", transcript[:200])
+
     try:
-        summary_resp = openai.ChatCompletion.create(
+        summary_resp = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an energy auditor assistant. Summarize the homeowner's concerns, comfort issues, and upgrade plans in concise, professional language."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an energy auditor assistant. Summarize the homeowner's concerns, comfort issues, "
+                        "and upgrade plans in concise, professional language."
+                    )
+                },
                 {"role": "user", "content": transcript}
             ]
         )
-        summary = summary_resp['choices'][0]['message']['content']
+        summary = summary_resp.choices[0].message.content
+        print("✅ Summary generated:", summary[:200])
+
     except Exception as e:
+        print("❌ LLM summarization failed:", str(e))
         os.remove(temp_path)
         return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
 
