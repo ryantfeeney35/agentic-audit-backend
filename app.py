@@ -280,7 +280,8 @@ def handle_interview(audit_id):
         file_path=temp_path,
         audit_id=audit_id,
         step_label='Initial Interview',
-        media_type='audio'
+        media_type='audio',
+        step_type='interview'  # ✅ this is likely required!
     )
 
     os.remove(temp_path)
