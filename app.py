@@ -300,6 +300,7 @@ def handle_interview(audit_id):
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
+        step_type='interview',  # ✅ fix here
         file_name=secure_filename(file.filename),
         media_type='audio',
         media_url=file_url
