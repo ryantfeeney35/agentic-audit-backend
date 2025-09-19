@@ -220,7 +220,7 @@ def get_audit_by_property(property_id):
         return jsonify({"error": "No audit found"}), 404
 
 # ---------------------- AUDIT INTERVIEW ----------------------
-@your_blueprint.route('/api/audits/<int:audit_id>/interview', methods=['POST'])
+@app.route('/api/audits/<int:audit_id>/interview', methods=['POST'])
 def handle_interview(audit_id):
     file = request.files.get('file')
     if not file:
@@ -499,10 +499,9 @@ def upload_media_by_step_label(audit_id, step_label):
         return jsonify({'error': 'Upload failed'}), 500
 
 # ---------------------- AUDIT CHAT ----------------------
-agent = Blueprint('agent', __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-@agent.route('/api/agent-review', methods=['POST'])
+@app.route('/api/agent-review', methods=['POST'])
 def agent_review():
     data = request.json
     messages = data.get("messages", [])

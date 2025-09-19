@@ -6,3 +6,4 @@ psycopg2-binary
 flask_sqlalchemy
 flask_migrate
 supabase
+openai
