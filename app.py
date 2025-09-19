@@ -230,7 +230,9 @@ def handle_interview(audit_id):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
         file.save(tmp.name)
         temp_path = tmp.name
-
+    print(f"Saving audio to {temp_path}")
+    print(f"File exists? {os.path.exists(temp_path)}")
+    print(f"OpenAI key loaded: {os.getenv('OPENAI_API_KEY')}")
     # Step 1: Transcribe audio with Whisper
     try:
         transcript_resp = openai.Audio.transcribe(
