@@ -336,7 +336,8 @@ def get_audit_steps(audit_id):
             "step_type": step.step_type,
             "is_completed": step.is_completed,
             "not_accessible": step.not_accessible,
-            "media": media  # ✅ Add this
+            "notes": step.notes,  # ✅ Add this line
+            "media": media
         })
 
     return jsonify(result)
