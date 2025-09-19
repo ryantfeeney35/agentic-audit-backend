@@ -22,13 +22,16 @@ VALUES
 
 DROP TABLE properties;
 
+delete from properties;
 delete from audits;
 delete from audit_steps;
+delete from audit_media;
 
+select * from properties;
 select * from audits;
 select * from audit_steps;
-select * from audit_findings;
 select * from audit_media;
+select * from audit_findings;
 
 select * from audits;
 

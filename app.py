@@ -11,6 +11,8 @@ from models import Audit, AuditStep, AuditMedia, AuditFinding
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from openai import OpenAI
+import tempfile
+from supabase_utils import upload_to_supabase_and_get_url
 
 # Load environment variables first
 load_dotenv()
@@ -217,6 +219,80 @@ def get_audit_by_property(property_id):
     else:
         return jsonify({"error": "No audit found"}), 404
 
+# ---------------------- AUDIT INTERVIEW ----------------------
+@your_blueprint.route('/api/audits/<int:audit_id>/interview', methods=['POST'])
+def handle_interview(audit_id):
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'Missing audio file'}), 400
+
+    # Save temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
+        file.save(tmp.name)
+        temp_path = tmp.name
+
+    # Step 1: Transcribe audio with Whisper
+    try:
+        transcript_resp = openai.Audio.transcribe(
+            model="whisper-1",
+            file=open(temp_path, "rb")
+        )
+        transcript = transcript_resp['text']
+    except Exception as e:
+        os.remove(temp_path)
+        return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
+
+    # Step 2: Generate summary from transcript
+    try:
+        summary_resp = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an energy auditor assistant. Summarize the homeowner's concerns, comfort issues, and upgrade plans in concise, professional language."},
+                {"role": "user", "content": transcript}
+            ]
+        )
+        summary = summary_resp['choices'][0]['message']['content']
+    except Exception as e:
+        os.remove(temp_path)
+        return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
+
+    # Step 3: Upload audio to Supabase
+    file_url = upload_to_supabase_and_get_url(
+        file_path=temp_path,
+        audit_id=audit_id,
+        step_label='Initial Interview',
+        media_type='audio'
+    )
+
+    os.remove(temp_path)
+
+    # Step 4: Create audit step and media
+    step = AuditStep(
+        audit_id=audit_id,
+        step_type='interview',
+        label='Initial Interview',
+        notes=summary,
+        is_completed=True
+    )
+    db.session.add(step)
+    db.session.commit()
+
+    media = AuditMedia(
+        audit_id=audit_id,
+        step_id=step.id,
+        file_name=secure_filename(file.filename),
+        media_type='audio',
+        media_url=file_url
+    )
+    db.session.add(media)
+    db.session.commit()
+
+    return jsonify({
+        'transcript': transcript,
+        'summary': summary,
+        'media_url': file_url,
+        'step_id': step.id
+    })
 # ---------------------- AUDIT STEPS ----------------------
 @app.route('/api/audits/<int:audit_id>/steps', methods=['GET'])
 def get_audit_steps(audit_id):
