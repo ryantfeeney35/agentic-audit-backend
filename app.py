@@ -232,15 +232,19 @@ def handle_interview(audit_id):
         temp_path = tmp.name
     print(f"Saving audio to {temp_path}")
     print(f"File exists? {os.path.exists(temp_path)}")
-    print(f"OpenAI key loaded: {os.getenv('OPENAI_API_KEY')}")
+
     # Step 1: Transcribe audio with Whisper
     try:
-        transcript_resp = openai.Audio.transcribe(
-            model="whisper-1",
-            file=open(temp_path, "rb")
-        )
+        print("🔍 Transcribing with OpenAI Whisper...")
+        with open(temp_path, "rb") as f:
+            transcript_resp = openai.Audio.transcribe(
+                model="whisper-1",
+                file=f
+            )
         transcript = transcript_resp['text']
+        print("✅ Transcript received:", transcript[:100])
     except Exception as e:
+        print("❌ Transcription failed:", str(e))
         os.remove(temp_path)
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
