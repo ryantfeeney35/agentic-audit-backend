@@ -135,20 +135,20 @@ def upload_utility_bill(property_id):
     file_content = file.read()
 
     try:
-        # ✅ Upload to Supabase Storage with overwrite enabled
+        # ✅ Always use a string for content-type (default PDF)
+        content_type = file.mimetype if file.mimetype else "application/pdf"
+
+        # ✅ Use upsert=True so replacement overwrites old file
         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
-            file_options={
-                "content-type": file.mimetype,
-                "upsert": True  # ✅ overwrite existing file if same path
-            }
+            file_options={"content-type": content_type},
+            upsert=True
         )
 
-        # ✅ Build public URL
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
-        # ✅ Save both URL and file name in DB
+        # Save URL + file name in DB
         property_obj = Property.query.get(property_id)
         if not property_obj:
             return jsonify({"error": "Property not found"}), 404
@@ -159,13 +159,13 @@ def upload_utility_bill(property_id):
 
         return jsonify({
             'message': 'Uploaded and saved successfully',
-            'publicUrl': public_url,   # 🔑 return in consistent shape
+            'url': public_url,
             'fileName': original_filename
         }), 200
 
     except Exception as e:
         print("❌ Utility bill upload failed:", e)
-        return jsonify({'error': 'Upload failed'}), 500
+        return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
 
 # ---------------------- AUDITS ----------------------
 @app.route('/api/properties/<int:property_id>/audits', methods=['POST'])
