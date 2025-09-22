@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 from openai import OpenAI
 import tempfile
 from supabase_utils import upload_to_supabase_and_get_url
+import json
 
 # Load environment variables first
 load_dotenv()

@@ -33,7 +33,7 @@ class Audit(db.Model):
     # Relationships
     property = relationship('Property', back_populates='audits')
     steps = relationship('AuditStep', back_populates='audit', cascade="all, delete-orphan")
-
+    media = relationship('AuditMedia', back_populates='audit', cascade="all, delete-orphan")
 
 class AuditStep(db.Model):
     __tablename__ = 'audit_steps'
@@ -54,16 +54,17 @@ class AuditStep(db.Model):
 class AuditMedia(db.Model):
     __tablename__ = 'audit_media'
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
     step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id'), nullable=True)
     step_type = db.Column(db.String, nullable=False)
     side = db.Column(db.String, nullable=True)
     media_url = db.Column(db.String, nullable=True)
-    file_name = db.Column(db.String, nullable=True)  # ✅ ADD THIS LINE
+    file_name = db.Column(db.String, nullable=True)
     media_type = db.Column(db.String, nullable=True)  # e.g., 'photo', 'video'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
+    audit = relationship('Audit', back_populates='media')
     step = relationship('AuditStep', back_populates='media')
 
 
