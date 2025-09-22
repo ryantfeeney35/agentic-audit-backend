@@ -330,13 +330,21 @@ def get_audit_steps(audit_id):
             "created_at": m.created_at.isoformat()
         } for m in media_items]
 
+        # Try to parse notes JSON if valid
+        notes_parsed = None
+        if step.notes:
+            try:
+                notes_parsed = json.loads(step.notes)
+            except Exception:
+                notes_parsed = step.notes  # fallback to raw string
+
         result.append({
             "id": step.id,
             "label": step.label,
             "step_type": step.step_type,
             "is_completed": step.is_completed,
             "not_accessible": step.not_accessible,
-            "notes": step.notes,  # ✅ Add this line
+            "notes": notes_parsed,
             "media": media
         })
 
@@ -354,6 +362,12 @@ def create_or_update_audit_step(audit_id):
     if not step_type or not label:
         return jsonify({'error': 'Missing step_type or label'}), 400
 
+    # If notes is a dict, store as JSON string
+    if isinstance(notes, dict):
+        notes_str = json.dumps(notes)
+    else:
+        notes_str = notes
+
     # Check if the step already exists
     existing_step = AuditStep.query.filter_by(
         audit_id=audit_id,
@@ -362,26 +376,23 @@ def create_or_update_audit_step(audit_id):
     ).first()
 
     if existing_step:
-        # Update existing values only if provided
         if is_completed is not None:
             existing_step.is_completed = is_completed
         if not_accessible is not None:
             existing_step.not_accessible = not_accessible
         if notes is not None:
-            existing_step.notes = notes
+            existing_step.notes = notes_str
 
         db.session.commit()
         return jsonify({"message": "Step updated", "id": existing_step.id}), 200
-
     else:
-        # Create new step
         new_step = AuditStep(
             audit_id=audit_id,
             step_type=step_type,
             label=label,
             is_completed=is_completed if is_completed is not None else False,
             not_accessible=not_accessible if not_accessible is not None else False,
-            notes=notes
+            notes=notes_str
         )
         db.session.add(new_step)
         db.session.commit()
