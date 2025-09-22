@@ -77,7 +77,8 @@ def handle_properties():
 def get_property(property_id):
     with db.engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built, sqft, utility_bill_name
+            SELECT id, street, city, state, zip_code, year_built, sqft,
+                   utility_bill_url, utility_bill_name
             FROM properties
             WHERE id = :id
         """), {"id": property_id}).fetchone()
@@ -91,7 +92,8 @@ def get_property(property_id):
                 "zip_code": result.zip_code,
                 "year_built": result.year_built,
                 "sqft": result.sqft,
-                "utility_bill_name": result.utility_bill_name  # ✅ NEW 
+                "utility_bill_url": result.utility_bill_url,   # ✅ include url
+                "utility_bill_name": result.utility_bill_name  # ✅ include filename
             })
         else:
             return jsonify({"error": "Property not found"}), 404
@@ -133,32 +135,36 @@ def upload_utility_bill(property_id):
     file_content = file.read()
 
     try:
-        # Upload to Supabase Storage
+        # ✅ Upload to Supabase Storage with overwrite enabled
         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
             path=filename,
             file=file_content,
-            file_options={"content-type": file.mimetype}
+            file_options={
+                "content-type": file.mimetype,
+                "upsert": True  # ✅ overwrite existing file if same path
+            }
         )
 
+        # ✅ Build public URL
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
-        # Save URL + file name in DB
+        # ✅ Save both URL and file name in DB
         property_obj = Property.query.get(property_id)
         if not property_obj:
             return jsonify({"error": "Property not found"}), 404
 
         property_obj.utility_bill_url = public_url
-        property_obj.utility_bill_name = original_filename  # ✅ NEW
+        property_obj.utility_bill_name = original_filename
         db.session.commit()
 
         return jsonify({
             'message': 'Uploaded and saved successfully',
-            'url': public_url,
+            'publicUrl': public_url,   # 🔑 return in consistent shape
             'fileName': original_filename
         }), 200
 
     except Exception as e:
-        print(e)
+        print("❌ Utility bill upload failed:", e)
         return jsonify({'error': 'Upload failed'}), 500
 
 # ---------------------- AUDITS ----------------------
