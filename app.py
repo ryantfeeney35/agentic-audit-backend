@@ -135,32 +135,35 @@ def upload_utility_bill(property_id):
     file_content = file.read()
 
     try:
-        # ✅ Always use a string for content-type (default PDF)
+        # ✅ Ensure string mimetype
         content_type = file.mimetype if file.mimetype else "application/pdf"
 
-        # ✅ Use upsert=True so replacement overwrites old file
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+        # ✅ Use update() to overwrite if file exists
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
             path=filename,
             file=file_content,
-            file_options={"content-type": content_type},
-            upsert=True
+            file_options={"content-type": content_type}
         )
 
+        # Public URL
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
-        # Save URL + file name in DB
+        # ✅ Clean up display name
+        display_name = original_filename.replace("%20", " ")
+
+        # Save URL + display name in DB
         property_obj = Property.query.get(property_id)
         if not property_obj:
             return jsonify({"error": "Property not found"}), 404
 
         property_obj.utility_bill_url = public_url
-        property_obj.utility_bill_name = original_filename
+        property_obj.utility_bill_name = display_name
         db.session.commit()
 
         return jsonify({
             'message': 'Uploaded and saved successfully',
             'url': public_url,
-            'fileName': original_filename
+            'fileName': display_name
         }), 200
 
     except Exception as e:
