@@ -542,19 +542,18 @@ def upload_media_by_step_label(audit_id, step_label):
 
 # ---------------------- AUDIT CHAT ----------------------
 # routes/agent_review.py
-
 bp = Blueprint("agent_review", __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- DB helpers ---
-def get_conversation_history(audit_id, domain):
+# --- Conversation helpers ---
+def get_conversation_history(audit_id):
     rows = (
         AgentConversation.query
-        .filter_by(audit_id=audit_id, domain=domain)
+        .filter_by(audit_id=audit_id)
         .order_by(AgentConversation.created_at.asc())
         .all()
     )
-    return [{"role": r.role, "content": r.content} for r in rows]
+    return [{"role": r.role, "content": r.content, "domain": r.domain} for r in rows]
 
 def save_message(audit_id, domain, role, content):
     msg = AgentConversation(
@@ -567,151 +566,90 @@ def save_message(audit_id, domain, role, content):
     db.session.commit()
     return msg
 
-# --- Call LLM with persisted history ---
-def call_llm_with_history(audit_id, domain, user_input=None, system_prompt=None):
-    if user_input:
-        save_message(audit_id, domain, "user", user_input)
-
-    history = get_conversation_history(audit_id, domain)
-
-    if not any(msg["role"] == "system" for msg in history):
-        system_msg = {
-            "role": "system",
-            "content": system_prompt
-            or f"You are the {domain} agent. Stay focused only on {domain} issues."
-        }
-        save_message(audit_id, domain, "system", system_msg["content"])
-        history.insert(0, system_msg)
-
+# --- Base LLM call ---
+def call_llm(messages, domain="orchestrator"):
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=history,
+        model="gpt-4.1",
+        messages=messages,
         temperature=0.3,
     )
-    assistant_msg = response.choices[0].message.content
+    reply = response.choices[0].message.content
+    return reply
 
-    save_message(audit_id, domain, "assistant", assistant_msg)
-    return assistant_msg
-
-# --- Specialized sub-agents ---
-def insulation_agent(audit_id, context=None):
-    return call_llm_with_history(
-        audit_id,
-        "insulation",
-        context,
-        system_prompt="You are InsulationAgent. Focus strictly on insulation questions and findings."
+# --- Specialized agents ---
+def insulation_agent(context):
+    return call_llm(
+        [
+            {"role": "system", "content": "You are the Insulation Agent. Only talk about insulation."},
+            {"role": "user", "content": context},
+        ],
+        domain="insulation"
     )
 
-def siding_agent(audit_id, context=None):
-    return call_llm_with_history(
-        audit_id,
-        "siding",
-        context,
-        system_prompt="You are SidingAgent. Focus strictly on siding questions and findings."
+def siding_agent(context):
+    return call_llm(
+        [
+            {"role": "system", "content": "You are the Siding Agent. Only talk about siding."},
+            {"role": "user", "content": context},
+        ],
+        domain="siding"
     )
 
-# --- Orchestrator ---
-def orchestration_agent(audit_id, context=None):
-    system_prompt = """You are the OrchestratorAgent. 
-    Your job is to decide whether the user's input relates to insulation, siding, or both. 
-    Route the message accordingly to the right sub-agents, then summarize or continue the dialog."""
+# --- Orchestration Agent ---
+def orchestration_agent(audit_id, context):
+    history = get_conversation_history(audit_id)
 
-    # Save orchestration input
-    if context:
-        save_message(audit_id, "orchestrator", "user", context)
+    # Build orchestrator prompt
+    messages = [
+        {"role": "system", "content": "You are the Orchestrator Agent. Your job is to decide if the insulation agent, siding agent, or yourself should respond. Delegate appropriately, merge results, and keep conversation coherent."},
+        *[{"role": m["role"], "content": m["content"]} for m in history],
+        {"role": "user", "content": context},
+    ]
 
-    history = get_conversation_history(audit_id, "orchestrator")
-    if not any(msg["role"] == "system" for msg in history):
-        save_message(audit_id, "orchestrator", "system", system_prompt)
-        history.insert(0, {"role": "system", "content": system_prompt})
+    # Save user input
+    save_message(audit_id, "orchestrator", "user", context)
 
-    # Call orchestrator LLM to decide routing
-    decision = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=history,
-        temperature=0.2,
-    )
-    orchestrator_reply = decision.choices[0].message.content
-    save_message(audit_id, "orchestrator", "assistant", orchestrator_reply)
+    # Orchestrator decides
+    orchestration_reply = call_llm(messages, domain="orchestrator")
+    save_message(audit_id, "orchestrator", "assistant", orchestration_reply)
 
-    # Simple routing (LLM decides domains explicitly could be added later)
-    if "insulation" in orchestrator_reply.lower():
-        insulation_agent(audit_id, context)
-    if "siding" in orchestrator_reply.lower():
-        siding_agent(audit_id, context)
+    final_reply = orchestration_reply
 
-    return orchestrator_reply
+    # Delegate if needed
+    if "insulation" in orchestration_reply.lower():
+        ins_reply = insulation_agent(context)
+        save_message(audit_id, "insulation", "assistant", ins_reply)
 
-# --- Routes ---
+        # ✅ Merge orchestrator + insulation into one assistant reply
+        final_reply = f"{orchestration_reply}\n\n{ins_reply}"
+
+    elif "siding" in orchestration_reply.lower():
+        sid_reply = siding_agent(context)
+        save_message(audit_id, "siding", "assistant", sid_reply)
+
+        # ✅ Merge orchestrator + siding into one assistant reply
+        final_reply = f"{orchestration_reply}\n\n{sid_reply}"
+
+    # Save merged final reply as "assistant" under orchestrator
+    save_message(audit_id, "orchestrator", "assistant", final_reply)
+
+    return final_reply
+
+# --- Flask Route ---
 @bp.route("/api/agent-review", methods=["POST"])
 def agent_review():
     data = request.json
-    audit_id = data.get("audit_id")
-    domain = data.get("domain")   # "insulation", "siding", or "orchestrator"
-    user_input = data.get("user_input")
+    audit_id = data.get("auditId")
+    context = data.get("context", "")
 
-    if not audit_id or not domain:
-        return jsonify({"error": "audit_id and domain required"}), 400
+    if not audit_id:
+        return jsonify({"error": "auditId required"}), 400
 
     try:
-        if domain == "orchestrator":
-            reply = orchestration_agent(audit_id, user_input)
-        elif domain == "insulation":
-            reply = insulation_agent(audit_id, user_input)
-        elif domain == "siding":
-            reply = siding_agent(audit_id, user_input)
-        else:
-            return jsonify({"error": f"Unknown domain: {domain}"}), 400
-
-        return jsonify({"reply": reply})
+        response = orchestration_agent(audit_id, context)
+        return jsonify({"response": response})
     except Exception as e:
-        print("❌ Agent error:", e)
         return jsonify({"error": str(e)}), 500
-
-@bp.route("/api/agent-conversations", methods=["GET"])
-def get_conversations():
-    audit_id = request.args.get("audit_id")
-    domain = request.args.get("domain")
-    if not audit_id or not domain:
-        return jsonify([])
-
-    rows = AgentConversation.query.filter_by(
-        audit_id=audit_id, domain=domain
-    ).order_by(AgentConversation.created_at.asc()).all()
-
-    return jsonify([
-        {
-            "id": r.id,
-            "role": r.role,
-            "content": r.content,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ])
-
-@bp.route("/api/agent-conversations/merged", methods=["GET"])
-def get_merged_conversations():
-    audit_id = request.args.get("audit_id")
-    if not audit_id:
-        return jsonify([])
-
-    rows = (
-        AgentConversation.query
-        .filter_by(audit_id=audit_id)
-        .order_by(AgentConversation.created_at.asc())
-        .all()
-    )
-
-    return jsonify([
-        {
-            "id": r.id,
-            "domain": r.domain,
-            "role": r.role,
-            "content": r.content,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ])
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
 def add_finding(step_id):
