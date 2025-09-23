@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 
 from models import db
-from routes import register_blueprints
+from backend.routes import register_blueprints
 
 # Load environment variables
 load_dotenv()
