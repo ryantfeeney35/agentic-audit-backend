@@ -686,8 +686,31 @@ def get_merged_conversation():
 
     return jsonify(merged)
 
+@bp.route("/api/agent-conversations", methods=["POST"])
+def add_conversation_message():
+    data = request.get_json()
+    audit_id = data.get("audit_id")
+    domain = data.get("domain", "orchestrator")
+    role = data.get("role")
+    content = data.get("content")
 
-app.register_blueprint(bp)
+    if not audit_id or not role or not content:
+        return jsonify({"error": "audit_id, role, and content are required"}), 400
+
+    try:
+        msg = save_message(audit_id, domain, role, content)
+        return jsonify({
+            "id": msg.id,
+            "audit_id": msg.audit_id,
+            "domain": msg.domain,
+            "role": msg.role,
+            "content": msg.content,
+            "created_at": msg.created_at.isoformat()
+        }), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+app.register_blueprint(bp, url_prefix="/api")
 
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
