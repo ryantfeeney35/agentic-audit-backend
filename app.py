@@ -686,6 +686,9 @@ def get_merged_conversation():
 
     return jsonify(merged)
 
+
+app.register_blueprint(bp)
+
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
 def add_finding(step_id):
