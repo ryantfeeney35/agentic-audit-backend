@@ -1,7 +1,8 @@
-from flask import Blueprint, request, jsonify
+# agent_routes.py
+from flask import Blueprint, jsonify, request
+from models import AgentConversation, db
 from openai import OpenAI
 import os
-from models import AgentConversation, db
 
 bp = Blueprint("agent_review", __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -28,7 +29,7 @@ def save_message(audit_id, domain, role, content):
     return msg
 
 # --- Base LLM call ---
-def call_llm(messages, domain="orchestrator"):
+def call_llm(messages):
     response = client.chat.completions.create(
         model="gpt-4.1",
         messages=messages,
@@ -38,22 +39,16 @@ def call_llm(messages, domain="orchestrator"):
 
 # --- Specialized agents ---
 def insulation_agent(context):
-    return call_llm(
-        [
-            {"role": "system", "content": "You are the Insulation Agent. Only talk about insulation."},
-            {"role": "user", "content": context},
-        ],
-        domain="insulation"
-    )
+    return call_llm([
+        {"role": "system", "content": "You are the Insulation Agent. Only talk about insulation."},
+        {"role": "user", "content": context},
+    ])
 
 def siding_agent(context):
-    return call_llm(
-        [
-            {"role": "system", "content": "You are the Siding Agent. Only talk about siding."},
-            {"role": "user", "content": context},
-        ],
-        domain="siding"
-    )
+    return call_llm([
+        {"role": "system", "content": "You are the Siding Agent. Only talk about siding."},
+        {"role": "user", "content": context},
+    ])
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context):
@@ -65,13 +60,16 @@ def orchestration_agent(audit_id, context):
         {"role": "user", "content": context},
     ]
 
+    # Save user input
     save_message(audit_id, "orchestrator", "user", context)
 
-    orchestration_reply = call_llm(messages, domain="orchestrator")
+    # Orchestrator reply
+    orchestration_reply = call_llm(messages)
     save_message(audit_id, "orchestrator", "assistant", orchestration_reply)
 
     final_reply = orchestration_reply
 
+    # Delegate if orchestrator hints at domain
     if "insulation" in orchestration_reply.lower():
         ins_reply = insulation_agent(context)
         save_message(audit_id, "insulation", "assistant", ins_reply)
@@ -82,10 +80,12 @@ def orchestration_agent(audit_id, context):
         save_message(audit_id, "siding", "assistant", sid_reply)
         final_reply = f"{orchestration_reply}\n\n{sid_reply}"
 
+    # Save merged final reply under orchestrator
     save_message(audit_id, "orchestrator", "assistant", final_reply)
+
     return final_reply
 
-# --- Routes ---
+# --- Flask Routes ---
 @bp.route("/agent-review", methods=["POST"])
 def agent_review():
     data = request.json
@@ -114,14 +114,14 @@ def get_merged_conversation():
         .all()
     )
 
-    merged = []
-    for r in rows:
-        merged.append({
+    merged = [
+        {
             "role": r.role,
             "content": r.content,
-            "created_at": r.created_at.isoformat(),
-            "domain": r.domain
-        })
+            "created_at": r.created_at.isoformat()
+        }
+        for r in rows if r.role in ["system", "user", "assistant"]
+    ]
 
     return jsonify(merged)
 
@@ -129,9 +129,9 @@ def get_merged_conversation():
 def add_conversation_message():
     data = request.get_json()
     audit_id = data.get("audit_id")
-    domain = data.get("domain", "orchestrator")
     role = data.get("role")
     content = data.get("content")
+    domain = data.get("domain", "orchestrator")
 
     if not audit_id or not role or not content:
         return jsonify({"error": "audit_id, role, and content are required"}), 400
