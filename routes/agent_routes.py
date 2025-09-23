@@ -1,6 +1,6 @@
 # agent_routes.py
 from flask import Blueprint, jsonify, request
-from models import AgentConversation, db
+from models import AgentConversation, Audit, AuditStep, AuditMedia, db
 from openai import OpenAI
 import os
 import logging
@@ -45,144 +45,74 @@ def call_llm(messages):
 # --- Specialized agents ---
 def insulation_agent(context):
     return call_llm([
-        {
-            "role": "system",
-            "content": (
-                "You are the Insulation Agent. Your role is to evaluate insulation "
-                "related information only. Review the context carefully. "
-                "If the information is incomplete, ask clear, specific follow-up "
-                "questions that will help you reach a recommendation. "
-                "If enough information is already provided, summarize the key "
-                "findings clearly — but do not make final upgrade recommendations yet. "
-                "Leave that for the orchestrator."
-            )
-        },
+        {"role": "system", "content": (
+            "You are the Insulation Agent. Only discuss insulation. "
+            "If information is incomplete, ask clear follow-up questions. "
+            "If enough info is provided, summarize insulation findings (no recommendations yet)."
+        )},
         {"role": "user", "content": context},
     ])
 
 def siding_agent(context):
     return call_llm([
-        {
-            "role": "system",
-            "content": (
-                "You are the Siding Agent. Your role is to evaluate siding and exterior "
-                "wall information only. Review the context carefully. "
-                "If the information is incomplete, ask clear, specific follow-up "
-                "questions that will help you reach a recommendation. "
-                "If enough information is already provided, summarize the key "
-                "findings clearly — but do not make final upgrade recommendations yet. "
-                "Leave that for the orchestrator."
-            )
-        },
+        {"role": "system", "content": (
+            "You are the Siding Agent. Only discuss siding and exterior walls. "
+            "If information is incomplete, ask clear follow-up questions. "
+            "If enough info is provided, summarize siding findings (no recommendations yet)."
+        )},
         {"role": "user", "content": context},
     ])
 
 # --- Orchestration Agent ---
-def orchestration_agent(audit_id, context):
-    from models import Audit, AuditStep, AuditMedia  # ensure imports
-
+def orchestration_agent(audit_id, context, bootstrap=False):
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     property_obj = audit.property if audit else None
 
     # --- Build context ---
     context_summary = []
-
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
-
     if property_obj and property_obj.utility_bill_url:
-        bill_desc = f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}"
-        context_summary.append(bill_desc)
-
+        context_summary.append(f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}")
     for step in steps:
         notes = step.notes or ""
         context_summary.append(f"{step.label} ({step.step_type}) - Notes: {notes}")
 
-    full_context = "\n".join(context_summary)
+    full_context = "\n".join(context_summary) + f"\n{context}"
 
-    # --- Conversation history ---
-    history = get_conversation_history(audit_id)
-
-    # --- Orchestrator system prompt ---
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are the Orchestrator Agent for a home energy audit.\n"
-                "You have access to:\n"
-                "- Homeowner interview summary\n"
-                "- Step notes (insulation thickness, siding notes, etc.)\n"
-                "- Uploaded media (photos, videos)\n"
-                "- Utility bills\n\n"
-                "Your responsibilities:\n"
-                "1. Review all context and decide whether insulation or siding (or both) are relevant.\n"
-                "2. Forward the relevant portions of context to the insulation or siding agent.\n"
-                "3. Collect their clarifying questions or findings.\n"
-                "4. Merge their responses into ONE coherent assistant message for the user.\n"
-                "   - Eliminate overlaps and duplicates.\n"
-                "   - Output ONE consolidated summary and ONE consolidated list of follow-up questions.\n"
-                "5. Do NOT produce final upgrade recommendations yet."
-            ),
-        },
-        *[{"role": m["role"], "content": m["content"]} for m in history],
-        {"role": "user", "content": f"Context so far:\n{full_context}\n\n{context}"},
-    ]
-
-    # Save incoming user message
+    # Save user input
     save_message(audit_id, "orchestrator", "user", context)
 
-    logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
+    # --- Call specialized agents ---
+    logger.debug("📤 Sending to Insulation Agent...")
+    ins_reply = insulation_agent(full_context)
+    save_message(audit_id, "insulation", "assistant", ins_reply)
 
-    # --- Step 1: Call orchestrator LLM (to decide delegation) ---
+    logger.debug("📤 Sending to Siding Agent...")
+    sid_reply = siding_agent(full_context)
+    save_message(audit_id, "siding", "assistant", sid_reply)
+
+    # --- Orchestrator consolidation ---
+    system_prompt = (
+        "You are the Orchestrator Agent.\n"
+        f"Bootstrap={bootstrap}.\n"
+        "You will receive the insulation and siding agent replies.\n"
+        "- If bootstrap=True: Produce a single coherent SUMMARY of the home’s status AND a unified, deduplicated list of follow-up questions.\n"
+        "- If bootstrap=False: ONLY produce an updated unified list of follow-up questions. Do not repeat the summary.\n"
+        "- If no further questions are needed, respond exactly: 'No further questions. Ready for recommendations.'"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Insulation Agent reply:\n{ins_reply}\n\nSiding Agent reply:\n{sid_reply}"},
+    ]
+
     orchestration_reply = call_llm(messages)
-    logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
+    logger.debug("🤖 Orchestrator Final Reply: %s", orchestration_reply)
 
-    # --- Step 2: Collect agent replies ---
-    agent_replies = []
-
-    if "insulation" in orchestration_reply.lower():
-        logger.debug("🪵 Delegating to Insulation Agent...")
-        ins_reply = insulation_agent(full_context)
-        logger.debug("🪵 Insulation Agent Reply: %s", ins_reply)
-        save_message(audit_id, "insulation", "assistant", ins_reply)
-        agent_replies.append(f"INSULATION:\n{ins_reply}")
-
-    if "siding" in orchestration_reply.lower():
-        logger.debug("🏠 Delegating to Siding Agent...")
-        sid_reply = siding_agent(full_context)
-        logger.debug("🏠 Siding Agent Reply: %s", sid_reply)
-        save_message(audit_id, "siding", "assistant", sid_reply)
-        agent_replies.append(f"SIDING:\n{sid_reply}")
-
-    # --- Step 3: Consolidate agent responses ---
-    final_reply = orchestration_reply
-    if agent_replies:
-        consolidation_prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "You are the Orchestrator Consolidator.\n"
-                    "You have received draft responses from domain-specific agents.\n"
-                    "Task:\n"
-                    "1. Eliminate duplication and overlap.\n"
-                    "2. Ensure the final result is coherent, professional, and concise.\n"
-                    "3. Output ONE summary of findings so far.\n"
-                    "4. Output ONE unified list of follow-up questions (if any remain).\n"
-                    "Do not produce recommendations yet."
-                ),
-            },
-            {"role": "user", "content": "\n\n".join(agent_replies)},
-        ]
-        consolidated = call_llm(consolidation_prompt)
-        logger.debug("📦 Consolidated Reply: %s", consolidated)
-        final_reply = consolidated
-
-    # --- Step 4: Save final merged response ---
-    save_message(audit_id, "orchestrator", "assistant", final_reply)
-    logger.debug("✅ Final Orchestrator Reply Saved")
-
-    return final_reply
+    save_message(audit_id, "orchestrator", "assistant", orchestration_reply)
+    return orchestration_reply
 
 # --- Flask Routes ---
 @bp.route("/agent-review", methods=["POST"])
@@ -190,14 +120,16 @@ def agent_review():
     data = request.json
     audit_id = data.get("auditId")
     context = data.get("context", "")
+    bootstrap = data.get("bootstrap", False)
 
     if not audit_id:
         return jsonify({"error": "auditId required"}), 400
 
     try:
-        response = orchestration_agent(audit_id, context)
+        response = orchestration_agent(audit_id, context, bootstrap=bootstrap)
         return jsonify({"response": response})
     except Exception as e:
+        logger.exception("❌ Orchestration failed")
         return jsonify({"error": str(e)}), 500
 
 @bp.route("/agent-conversations/merged", methods=["GET"])
@@ -221,7 +153,6 @@ def get_merged_conversation():
         }
         for r in rows if r.role in ["system", "user", "assistant"]
     ]
-
     return jsonify(merged)
 
 @bp.route("/agent-conversations", methods=["POST"])
@@ -246,4 +177,5 @@ def add_conversation_message():
             "created_at": msg.created_at.isoformat()
         }), 201
     except Exception as e:
+        logger.exception("❌ Failed to save conversation message")
         return jsonify({"error": str(e)}), 500
