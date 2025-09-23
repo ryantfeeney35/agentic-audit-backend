@@ -650,6 +650,42 @@ def agent_review():
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@bp.route("/api/agent-conversations/merged", methods=["GET"])
+def get_merged_conversation():
+    audit_id = request.args.get("audit_id")
+    if not audit_id:
+        return jsonify({"error": "audit_id required"}), 400
+
+    # Pull all messages across domains
+    rows = (
+        AgentConversation.query
+        .filter_by(audit_id=audit_id)
+        .order_by(AgentConversation.created_at.asc())
+        .all()
+    )
+
+    # Build merged conversation
+    merged = []
+    for r in rows:
+        # Only show system/user/assistant roles (not raw domain markers)
+        if r.role in ["system", "user", "assistant"]:
+            merged.append({
+                "role": r.role,
+                "content": r.content,
+                "created_at": r.created_at.isoformat()
+            })
+        elif r.role == "assistant":
+            # In case domain-specific assistants are saved separately,
+            # merge their replies under assistant
+            merged.append({
+                "role": "assistant",
+                "content": r.content,
+                "created_at": r.created_at.isoformat()
+            })
+
+    return jsonify(merged)
+
 # ---------------------- AUDIT FINDINGS ----------------------
 @app.route('/api/steps/<int:step_id>/findings', methods=['POST'])
 def add_finding(step_id):
