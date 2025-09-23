@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 from sqlalchemy import text
 from supabase import create_client, Client
-from models import Audit, AuditStep, AuditMedia, AgentConversation, AuditFinding
+from models import Audit, AuditStep, AuditMedia, AgentConversation, AuditFinding, db
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from openai import OpenAI
