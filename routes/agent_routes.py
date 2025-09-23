@@ -164,17 +164,24 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
 
 # --- Route ---
 @bp.route("/agent-review", methods=["POST"])
+@bp.route("/agent-review", methods=["POST"])
 def agent_review():
     data = request.json
     audit_id = data.get("auditId")
     context = data.get("context", "")
-    bootstrap = data.get("bootstrap", False)  # ✅ pick up flag
+    bootstrap = data.get("bootstrap", False)
 
     if not audit_id:
         return jsonify({"error": "auditId required"}), 400
 
     try:
-        response = orchestration_agent(audit_id, context, bootstrap=bootstrap)
+        # Mark user-provided context as from_user unless this is a bootstrap
+        response = orchestration_agent(
+            audit_id,
+            context,
+            from_user=not bootstrap,
+            bootstrap=bootstrap
+        )
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
