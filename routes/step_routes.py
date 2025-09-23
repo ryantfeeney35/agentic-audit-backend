@@ -5,7 +5,7 @@ import json
 bp = Blueprint("steps", __name__)
 
 # --- Get all steps for an audit ---
-@bp.route('/api/audits/<int:audit_id>/steps', methods=['GET'])
+@bp.route('/audits/<int:audit_id>/steps', methods=['GET'])
 def get_audit_steps(audit_id):
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     result = []
@@ -43,7 +43,7 @@ def get_audit_steps(audit_id):
 
 
 # --- Create or update an audit step ---
-@bp.route('/api/audits/<int:audit_id>/steps', methods=['POST'])
+@bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
     data = request.get_json()
     step_type = data.get('step_type')
@@ -90,7 +90,7 @@ def create_or_update_audit_step(audit_id):
 
 
 # --- Get media for a specific step label ---
-@bp.route('/api/audits/<int:audit_id>/steps/<string:step_label>/media', methods=['GET'])
+@bp.route('/audits/<int:audit_id>/steps/<string:step_label>/media', methods=['GET'])
 def get_media_by_step_label(audit_id, step_label):
     step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
     if not step:

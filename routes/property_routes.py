@@ -13,7 +13,7 @@ SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 # --- Routes ---
-@bp.route('/api/properties', methods=['GET', 'POST'])
+@bp.route('/properties', methods=['GET', 'POST'])
 def handle_properties():
     if request.method == 'GET':
         with db.engine.connect() as conn:
@@ -48,7 +48,7 @@ def handle_properties():
         db.session.commit()
         return jsonify({'id': new_property.id}), 201
 
-@bp.route('/api/properties/<int:property_id>', methods=['GET'])
+@bp.route('/properties/<int:property_id>', methods=['GET'])
 def get_property(property_id):
     with db.engine.connect() as conn:
         result = conn.execute(text("""
@@ -73,7 +73,7 @@ def get_property(property_id):
         else:
             return jsonify({"error": "Property not found"}), 404
 
-@bp.route('/api/properties/<int:id>', methods=['PUT'])
+@bp.route('/properties/<int:id>', methods=['PUT'])
 def update_property(id):
     data = request.get_json()
     stmt = text("""
@@ -85,7 +85,7 @@ def update_property(id):
         conn.execute(stmt, {**data, "id": id})
     return jsonify({"message": "Property updated"})
 
-@bp.route('/api/properties/<int:property_id>', methods=['DELETE'])
+@bp.route('/properties/<int:property_id>', methods=['DELETE'])
 def delete_property(property_id):
     with db.engine.begin() as conn:
         result = conn.execute(
@@ -98,7 +98,7 @@ def delete_property(property_id):
         else:
             return jsonify({"error": "Property not found"}), 404
 
-@bp.route('/api/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
+@bp.route('/properties/<int:property_id>/upload-utility-bill', methods=['POST'])
 def upload_utility_bill(property_id):
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400

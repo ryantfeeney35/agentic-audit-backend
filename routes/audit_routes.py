@@ -13,7 +13,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Routes ---
 
-@bp.route('/api/audits', methods=['POST'])
+@bp.route('/audits', methods=['POST'])
 def create_audit():
     data = request.get_json()
     property_id = data.get("property_id")
@@ -36,7 +36,7 @@ def create_audit():
         return jsonify({"error": "Failed to create audit"}), 500
 
 
-@bp.route('/api/audits/<int:audit_id>', methods=['GET'])
+@bp.route('/audits/<int:audit_id>', methods=['GET'])
 def get_audit(audit_id):
     audit = Audit.query.get(audit_id)
     if not audit:
@@ -60,7 +60,7 @@ def get_audit(audit_id):
     })
 
 
-@bp.route('/api/properties/<int:property_id>/audit', methods=['GET'])
+@bp.route('/properties/<int:property_id>/audit', methods=['GET'])
 def get_audit_by_property(property_id):
     audit = Audit.query.filter_by(property_id=property_id).first()
     if audit:
@@ -73,7 +73,7 @@ def get_audit_by_property(property_id):
         return jsonify({"error": "No audit found"}), 404
 
 
-@bp.route('/api/audits/<int:audit_id>/interview', methods=['POST'])
+@bp.route('/audits/<int:audit_id>/interview', methods=['POST'])
 def handle_interview(audit_id):
     file = request.files.get('file')
     if not file:

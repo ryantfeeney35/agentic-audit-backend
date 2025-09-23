@@ -14,7 +14,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
 # --- Upload media by step_id ---
-@bp.route('/api/steps/<int:step_id>/upload', methods=['POST'])
+@bp.route('/steps/<int:step_id>/upload', methods=['POST'])
 def upload_step_media(step_id):
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
@@ -58,7 +58,7 @@ def upload_step_media(step_id):
 
 
 # --- Get all media for an audit ---
-@bp.route('/api/audits/<int:audit_id>/media', methods=['GET'])
+@bp.route('/audits/<int:audit_id>/media', methods=['GET'])
 def get_audit_media(audit_id):
     media = AuditMedia.query.filter_by(audit_id=audit_id).all()
     return jsonify([{
@@ -74,7 +74,7 @@ def get_audit_media(audit_id):
 
 
 # --- Upload media by step label ---
-@bp.route('/api/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
+@bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 def upload_media_by_step_label(audit_id, step_label):
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
