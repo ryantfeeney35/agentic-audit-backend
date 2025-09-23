@@ -52,38 +52,97 @@ def siding_agent(context):
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context):
+    # Gather context from DB
+    audit = Audit.query.get(audit_id)
+    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
+    property_obj = audit.property if audit else None  # assuming relationship exists
+
+    context_summary = []
+
+    if audit and audit.notes:
+        context_summary.append(f"Interview summary: {audit.notes}")
+
+    # Include utility bill if available
+    if property_obj and property_obj.utility_bill_url:
+        bill_desc = f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}"
+        context_summary.append(bill_desc)
+
+    media_context = []
+    for step in steps:
+        notes = step.notes or ""
+        step_summary = f"{step.label} ({step.step_type}) - Notes: {notes}"
+        context_summary.append(step_summary)
+
+        # Fetch related media
+        media_items = AuditMedia.query.filter_by(step_id=step.id).all()
+        for m in media_items:
+            # Add text description + direct reference to URL
+            if m.media_type in ["photo", "image"]:
+                media_context.append({
+                    "type": "image_url",
+                    "image_url": {"url": m.media_url}
+                })
+            else:
+                media_context.append({
+                    "type": "text",
+                    "text": f"{m.media_type.upper()} file '{m.file_name}' from step '{step.label}' - {m.media_url}"
+                })
+
+    full_context = "\n".join(context_summary)
+
     history = get_conversation_history(audit_id)
 
     messages = [
-        {"role": "system", "content": "You are the Orchestrator Agent. Your job is to decide if the insulation agent, siding agent, or yourself should respond. Delegate appropriately, merge results, and keep conversation coherent."},
+        {
+            "role": "system",
+            "content": (
+                "You are the Orchestrator Agent for a home energy audit. "
+                "You have access to:\n"
+                "- Homeowner interview summary\n"
+                "- Step notes (insulation thickness, siding notes, etc.)\n"
+                "- Uploaded media (photos, videos)\n"
+                "- Utility bills\n\n"
+                "Your job is:\n"
+                "1. Carefully review ALL provided context and media.\n"
+                "2. If context is incomplete, ask the *minimum number* of precise follow-up questions.\n"
+                "3. Avoid small talk. Jump straight into technical clarifications.\n"
+                "4. When enough info is collected, provide a concise, actionable recommendation."
+            )
+        },
         *[{"role": m["role"], "content": m["content"]} for m in history],
-        {"role": "user", "content": context},
+        {"role": "user", "content": f"Context so far:\n{full_context}\n\n{context}"},
     ]
 
-    # Save user input
+    # Add media + utility bill PDF as multimodal input
+    if media_context:
+        messages.append({
+            "role": "user",
+            "content": media_context
+        })
+
+    # If utility bill is a PDF, add a link for GPT to parse
+    if property_obj and property_obj.utility_bill_url:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Here is the uploaded utility bill PDF:"},
+                {"type": "input_text", "text": property_obj.utility_bill_url}
+            ]
+        })
+
     save_message(audit_id, "orchestrator", "user", context)
 
-    # Orchestrator reply
-    orchestration_reply = call_llm(messages)
-    save_message(audit_id, "orchestrator", "assistant", orchestration_reply)
+    # 🔑 Call multimodal model (vision/text)
+    response = client.chat.completions.create(
+        model="gpt-4.1",
+        messages=messages,
+        temperature=0.3,
+    )
 
-    final_reply = orchestration_reply
+    reply = response.choices[0].message.content
+    save_message(audit_id, "orchestrator", "assistant", reply)
 
-    # Delegate if orchestrator hints at domain
-    if "insulation" in orchestration_reply.lower():
-        ins_reply = insulation_agent(context)
-        save_message(audit_id, "insulation", "assistant", ins_reply)
-        final_reply = f"{orchestration_reply}\n\n{ins_reply}"
-
-    elif "siding" in orchestration_reply.lower():
-        sid_reply = siding_agent(context)
-        save_message(audit_id, "siding", "assistant", sid_reply)
-        final_reply = f"{orchestration_reply}\n\n{sid_reply}"
-
-    # Save merged final reply under orchestrator
-    save_message(audit_id, "orchestrator", "assistant", final_reply)
-
-    return final_reply
+    return reply
 
 # --- Flask Routes ---
 @bp.route("/agent-review", methods=["POST"])
