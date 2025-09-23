@@ -64,7 +64,9 @@ def siding_agent(context):
     ])
 
 # --- Orchestration Agent ---
-def orchestration_agent(audit_id, context, bootstrap=False):
+def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
+    from models import Audit, AuditStep, AuditMedia  # ensure imports
+
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     property_obj = audit.property if audit else None
@@ -74,47 +76,91 @@ def orchestration_agent(audit_id, context, bootstrap=False):
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
     if property_obj and property_obj.utility_bill_url:
-        context_summary.append(f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}")
+        bill_desc = f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}"
+        context_summary.append(bill_desc)
     for step in steps:
         notes = step.notes or ""
         context_summary.append(f"{step.label} ({step.step_type}) - Notes: {notes}")
 
-    full_context = "\n".join(context_summary) + f"\n{context}"
+    full_context = "\n".join(context_summary)
 
-    # Save user input
-    save_message(audit_id, "orchestrator", "user", context)
+    # --- Conversation history ---
+    history = get_conversation_history(audit_id)
 
-    # --- Call specialized agents ---
-    logger.debug("📤 Sending to Insulation Agent...")
-    ins_reply = insulation_agent(full_context)
-    save_message(audit_id, "insulation", "assistant", ins_reply)
+    # --- Save only true user input ---
+    if from_user and context.strip():
+        save_message(audit_id, "orchestrator", "user", context)
 
-    logger.debug("📤 Sending to Siding Agent...")
-    sid_reply = siding_agent(full_context)
-    save_message(audit_id, "siding", "assistant", sid_reply)
+    # --- System prompt changes based on bootstrap ---
+    if bootstrap:
+        system_prompt = (
+            "You are the Orchestrator Agent for a home energy audit.\n"
+            "On first load (bootstrap):\n"
+            "1. Review all context (interview, notes, utility bill, photos).\n"
+            "2. Call insulation and siding agents.\n"
+            "3. Produce ONE unified summary of findings.\n"
+            "4. Produce ONE unified, deduplicated list of follow-up questions.\n"
+            "Do not generate upgrade recommendations yet."
+        )
+    else:
+        system_prompt = (
+            "You are the Orchestrator Agent for a home energy audit.\n"
+            "User has provided new answers.\n"
+            "Your task now:\n"
+            "1. Incorporate the new answers into context.\n"
+            "2. Ask insulation and siding agents for updated follow-up questions.\n"
+            "3. Produce ONLY a unified, deduplicated list of remaining follow-up questions.\n"
+            "Do not repeat the full summary unless explicitly asked."
+        )
 
-    # --- Orchestrator consolidation ---
-    system_prompt = (
-        "You are the Orchestrator Agent.\n"
-        f"Bootstrap={bootstrap}.\n"
-        "You will receive the insulation and siding agent replies.\n"
-        "- If bootstrap=True: Produce a single coherent SUMMARY of the home’s status AND a unified, deduplicated list of follow-up questions.\n"
-        "- If bootstrap=False: ONLY produce an updated unified list of follow-up questions. Do not repeat the summary.\n"
-        "- If no further questions are needed, respond exactly: 'No further questions. Ready for recommendations.'"
-    )
-
+    # --- Orchestrator messages ---
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Insulation Agent reply:\n{ins_reply}\n\nSiding Agent reply:\n{sid_reply}"},
+        *[{"role": m["role"], "content": m["content"]} for m in history],
+        {"role": "user", "content": f"Context so far:\n{full_context}\n\n{context}"},
     ]
 
+    logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
+
+    # --- Step 1: Orchestrator decides relevance ---
     orchestration_reply = call_llm(messages)
-    logger.debug("🤖 Orchestrator Final Reply: %s", orchestration_reply)
+    logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
 
-    save_message(audit_id, "orchestrator", "assistant", orchestration_reply)
-    return orchestration_reply
+    # --- Step 2: Delegate to specialized agents ---
+    agent_replies = []
+    if "insulation" in orchestration_reply.lower():
+        ins_reply = insulation_agent(full_context + "\n" + context)
+        save_message(audit_id, "insulation", "assistant", ins_reply)
+        agent_replies.append(ins_reply)
+    if "siding" in orchestration_reply.lower():
+        sid_reply = siding_agent(full_context + "\n" + context)
+        save_message(audit_id, "siding", "assistant", sid_reply)
+        agent_replies.append(sid_reply)
 
-# --- Flask Routes ---
+    # --- Step 3: Merge results ---
+    merge_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "You are the Orchestrator Agent merging multiple agent outputs.\n"
+                "On bootstrap: return one unified summary + unified deduplicated follow-up questions.\n"
+                "On later turns: return only an updated, unified list of remaining follow-up questions.\n"
+                "Do not repeat earlier summaries unless asked."
+            ),
+        },
+        {"role": "user", "content": "\n\n".join([orchestration_reply] + agent_replies)},
+    ]
+
+    final_reply = call_llm(merge_prompt)
+
+    # --- Save orchestrator output ---
+    save_message(audit_id, "orchestrator", "assistant", final_reply)
+    logger.debug("✅ Final Orchestrator Reply Saved")
+
+    return final_reply
+
+
+# --- Route ---
 @bp.route("/agent-review", methods=["POST"])
 def agent_review():
     data = request.json
@@ -126,10 +172,9 @@ def agent_review():
         return jsonify({"error": "auditId required"}), 400
 
     try:
-        response = orchestration_agent(audit_id, context, bootstrap=bootstrap)
+        response = orchestration_agent(audit_id, context, from_user=not bootstrap, bootstrap=bootstrap)
         return jsonify({"response": response})
     except Exception as e:
-        logger.exception("❌ Orchestration failed")
         return jsonify({"error": str(e)}), 500
 
 @bp.route("/agent-conversations/merged", methods=["GET"])
