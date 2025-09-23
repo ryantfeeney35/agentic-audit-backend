@@ -5,7 +5,6 @@ from openai import OpenAI
 import os
 import logging
 
-
 # configure logger
 logger = logging.getLogger("orchestration")
 logger.setLevel(logging.DEBUG)
@@ -49,31 +48,30 @@ def insulation_agent(context):
         {
             "role": "system",
             "content": (
-                "You are the Insulation Agent. Your role is to evaluate insulation "
-                "related information only. Review the context carefully. "
-                "If the information is incomplete, ask clear, specific follow-up "
-                "questions that will help you reach a recommendation. "
-                "If enough information is already provided, summarize the key "
-                "findings clearly — but do not make final upgrade recommendations yet. "
-                "Leave that for the orchestrator."
+                "You are the Insulation Agent. "
+                "Summarize insulation context and then ask follow-up questions if more info is needed. "
+                "Use this format:\n\n"
+                "Summary: ...\n"
+                "Follow-up Questions: ...\n"
+                "If none, write 'None'.\n"
+                "Do NOT provide upgrade recommendations yet."
             )
         },
         {"role": "user", "content": context},
     ])
-
 
 def siding_agent(context):
     return call_llm([
         {
             "role": "system",
             "content": (
-                "You are the Siding Agent. Your role is to evaluate siding and exterior "
-                "wall information only. Review the context carefully. "
-                "If the information is incomplete, ask clear, specific follow-up "
-                "questions that will help you reach a recommendation. "
-                "If enough information is already provided, summarize the key "
-                "findings clearly — but do not make final upgrade recommendations yet. "
-                "Leave that for the orchestrator."
+                "You are the Siding Agent. "
+                "Summarize siding/exterior context and then ask follow-up questions if more info is needed. "
+                "Use this format:\n\n"
+                "Summary: ...\n"
+                "Follow-up Questions: ...\n"
+                "If none, write 'None'.\n"
+                "Do NOT provide upgrade recommendations yet."
             )
         },
         {"role": "user", "content": context},
@@ -81,7 +79,7 @@ def siding_agent(context):
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context):
-    from models import Audit, AuditStep, AuditMedia  # ensure imports
+    from models import Audit, AuditStep, AuditMedia
 
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
@@ -112,19 +110,13 @@ def orchestration_agent(audit_id, context):
             "role": "system",
             "content": (
                 "You are the Orchestrator Agent for a home energy audit.\n"
-                "You have access to:\n"
-                "- Homeowner interview summary\n"
-                "- Step notes (insulation thickness, siding notes, etc.)\n"
-                "- Uploaded media (photos, videos)\n"
-                "- Utility bills\n\n"
-                "Your responsibilities:\n"
-                "1. Review all context and decide whether insulation or siding (or both) are relevant.\n"
-                "2. Forward the relevant portions of context to the insulation or siding agent.\n"
-                "3. Collect their clarifying questions or findings.\n"
-                "4. Merge their responses into ONE coherent assistant message for the user.\n"
-                "5. Only when enough information has been collected, provide a final recommendation "
-                "in clear, professional auditor-style language.\n"
-                "6. Avoid repeating raw context. Instead, summarize and guide the conversation."
+                "You must elicit follow-up questions from the Insulation and Siding agents until no more are required. "
+                "Rules:\n"
+                "- Forward context to insulation and siding agents.\n"
+                "- Collect their structured outputs (Summary + Follow-up Questions).\n"
+                "- Merge their follow-up questions into ONE coherent assistant reply.\n"
+                "- If BOTH agents return 'Follow-up Questions: None', reply with 'No further questions.'\n"
+                "- Do NOT provide upgrade recommendations at this stage."
             ),
         },
         *[{"role": m["role"], "content": m["content"]} for m in history],
@@ -136,28 +128,30 @@ def orchestration_agent(audit_id, context):
 
     logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
 
-    # --- Step 1: Call orchestrator LLM ---
-    orchestration_reply = call_llm(messages)
-    logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
+    # --- Delegate to both agents ---
+    logger.debug("🪵 Delegating to Insulation Agent...")
+    ins_reply = insulation_agent(full_context)
+    logger.debug("🪵 Insulation Agent Reply: %s", ins_reply)
+    save_message(audit_id, "insulation", "assistant", ins_reply)
 
-    # --- Step 2: Delegate if needed ---
-    final_reply = orchestration_reply
+    logger.debug("🏠 Delegating to Siding Agent...")
+    sid_reply = siding_agent(full_context)
+    logger.debug("🏠 Siding Agent Reply: %s", sid_reply)
+    save_message(audit_id, "siding", "assistant", sid_reply)
 
-    if "insulation" in orchestration_reply.lower():
-        logger.debug("🪵 Delegating to Insulation Agent...")
-        ins_reply = insulation_agent(full_context)
-        logger.debug("🪵 Insulation Agent Reply: %s", ins_reply)
-        save_message(audit_id, "insulation", "assistant", ins_reply)
-        final_reply = f"{orchestration_reply}\n\n{ins_reply}"
+    # --- Merge outputs ---
+    followups = []
+    if "follow-up questions: none" not in ins_reply.lower():
+        followups.append(ins_reply)
+    if "follow-up questions: none" not in sid_reply.lower():
+        followups.append(sid_reply)
 
-    if "siding" in orchestration_reply.lower():
-        logger.debug("🏠 Delegating to Siding Agent...")
-        sid_reply = siding_agent(full_context)
-        logger.debug("🏠 Siding Agent Reply: %s", sid_reply)
-        save_message(audit_id, "siding", "assistant", sid_reply)
-        final_reply = f"{orchestration_reply}\n\n{sid_reply}"
+    if followups:
+        final_reply = "\n\n".join(followups)
+    else:
+        final_reply = "No further questions."
 
-    # --- Step 3: Save final merged response ---
+    # --- Save final merged response ---
     save_message(audit_id, "orchestrator", "assistant", final_reply)
     logger.debug("✅ Final Orchestrator Reply Saved")
 
