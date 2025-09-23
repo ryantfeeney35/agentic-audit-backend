@@ -3,6 +3,12 @@ from flask import Blueprint, jsonify, request
 from models import AgentConversation, db
 from openai import OpenAI
 import os
+import logging
+
+
+# configure logger
+logger = logging.getLogger("orchestration")
+logger.setLevel(logging.DEBUG)
 
 bp = Blueprint("agent_review", __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -40,109 +46,122 @@ def call_llm(messages):
 # --- Specialized agents ---
 def insulation_agent(context):
     return call_llm([
-        {"role": "system", "content": "You are the Insulation Agent. Only talk about insulation."},
+        {
+            "role": "system",
+            "content": (
+                "You are the Insulation Agent. Your role is to evaluate insulation "
+                "related information only. Review the context carefully. "
+                "If the information is incomplete, ask clear, specific follow-up "
+                "questions that will help you reach a recommendation. "
+                "If enough information is already provided, summarize the key "
+                "findings clearly — but do not make final upgrade recommendations yet. "
+                "Leave that for the orchestrator."
+            )
+        },
         {"role": "user", "content": context},
     ])
 
+
 def siding_agent(context):
     return call_llm([
-        {"role": "system", "content": "You are the Siding Agent. Only talk about siding."},
+        {
+            "role": "system",
+            "content": (
+                "You are the Siding Agent. Your role is to evaluate siding and exterior "
+                "wall information only. Review the context carefully. "
+                "If the information is incomplete, ask clear, specific follow-up "
+                "questions that will help you reach a recommendation. "
+                "If enough information is already provided, summarize the key "
+                "findings clearly — but do not make final upgrade recommendations yet. "
+                "Leave that for the orchestrator."
+            )
+        },
         {"role": "user", "content": context},
     ])
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context):
-    # Gather context from DB
+    from models import Audit, AuditStep, AuditMedia  # ensure imports
+
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
-    property_obj = audit.property if audit else None  # assuming relationship exists
+    property_obj = audit.property if audit else None
 
+    # --- Build context ---
     context_summary = []
 
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
 
-    # Include utility bill if available
     if property_obj and property_obj.utility_bill_url:
         bill_desc = f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}"
         context_summary.append(bill_desc)
 
-    media_context = []
     for step in steps:
         notes = step.notes or ""
-        step_summary = f"{step.label} ({step.step_type}) - Notes: {notes}"
-        context_summary.append(step_summary)
-
-        # Fetch related media
-        media_items = AuditMedia.query.filter_by(step_id=step.id).all()
-        for m in media_items:
-            # Add text description + direct reference to URL
-            if m.media_type in ["photo", "image"]:
-                media_context.append({
-                    "type": "image_url",
-                    "image_url": {"url": m.media_url}
-                })
-            else:
-                media_context.append({
-                    "type": "text",
-                    "text": f"{m.media_type.upper()} file '{m.file_name}' from step '{step.label}' - {m.media_url}"
-                })
+        context_summary.append(f"{step.label} ({step.step_type}) - Notes: {notes}")
 
     full_context = "\n".join(context_summary)
 
+    # --- Conversation history ---
     history = get_conversation_history(audit_id)
 
+    # --- Orchestrator system prompt ---
     messages = [
         {
             "role": "system",
             "content": (
-                "You are the Orchestrator Agent for a home energy audit. "
+                "You are the Orchestrator Agent for a home energy audit.\n"
                 "You have access to:\n"
                 "- Homeowner interview summary\n"
                 "- Step notes (insulation thickness, siding notes, etc.)\n"
                 "- Uploaded media (photos, videos)\n"
                 "- Utility bills\n\n"
-                "Your job is:\n"
-                "1. Carefully review ALL provided context and media.\n"
-                "2. If context is incomplete, ask the *minimum number* of precise follow-up questions.\n"
-                "3. Avoid small talk. Jump straight into technical clarifications.\n"
-                "4. When enough info is collected, provide a concise, actionable recommendation."
-            )
+                "Your responsibilities:\n"
+                "1. Review all context and decide whether insulation or siding (or both) are relevant.\n"
+                "2. Forward the relevant portions of context to the insulation or siding agent.\n"
+                "3. Collect their clarifying questions or findings.\n"
+                "4. Merge their responses into ONE coherent assistant message for the user.\n"
+                "5. Only when enough information has been collected, provide a final recommendation "
+                "in clear, professional auditor-style language.\n"
+                "6. Avoid repeating raw context. Instead, summarize and guide the conversation."
+            ),
         },
         *[{"role": m["role"], "content": m["content"]} for m in history],
         {"role": "user", "content": f"Context so far:\n{full_context}\n\n{context}"},
     ]
 
-    # Add media + utility bill PDF as multimodal input
-    if media_context:
-        messages.append({
-            "role": "user",
-            "content": media_context
-        })
-
-    # If utility bill is a PDF, add a link for GPT to parse
-    if property_obj and property_obj.utility_bill_url:
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Here is the uploaded utility bill PDF:"},
-                {"type": "input_text", "text": property_obj.utility_bill_url}
-            ]
-        })
-
+    # Save incoming user message
     save_message(audit_id, "orchestrator", "user", context)
 
-    # 🔑 Call multimodal model (vision/text)
-    response = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=messages,
-        temperature=0.3,
-    )
+    logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
 
-    reply = response.choices[0].message.content
-    save_message(audit_id, "orchestrator", "assistant", reply)
+    # --- Step 1: Call orchestrator LLM ---
+    orchestration_reply = call_llm(messages)
+    logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
 
-    return reply
+    # --- Step 2: Delegate if needed ---
+    final_reply = orchestration_reply
+
+    if "insulation" in orchestration_reply.lower():
+        logger.debug("🪵 Delegating to Insulation Agent...")
+        ins_reply = insulation_agent(full_context)
+        logger.debug("🪵 Insulation Agent Reply: %s", ins_reply)
+        save_message(audit_id, "insulation", "assistant", ins_reply)
+        final_reply = f"{orchestration_reply}\n\n{ins_reply}"
+
+    if "siding" in orchestration_reply.lower():
+        logger.debug("🏠 Delegating to Siding Agent...")
+        sid_reply = siding_agent(full_context)
+        logger.debug("🏠 Siding Agent Reply: %s", sid_reply)
+        save_message(audit_id, "siding", "assistant", sid_reply)
+        final_reply = f"{orchestration_reply}\n\n{sid_reply}"
+
+    # --- Step 3: Save final merged response ---
+    save_message(audit_id, "orchestrator", "assistant", final_reply)
+    logger.debug("✅ Final Orchestrator Reply Saved")
+
+    return final_reply
 
 # --- Flask Routes ---
 @bp.route("/agent-review", methods=["POST"])
