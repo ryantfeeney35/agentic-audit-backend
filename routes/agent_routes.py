@@ -65,7 +65,7 @@ def siding_agent(context):
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
-    from models import Audit, AuditStep, AuditMedia  # ensure imports
+    from models import Audit, AuditStep, AuditMedia
 
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
@@ -84,14 +84,17 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
 
     full_context = "\n".join(context_summary)
 
-    # --- Conversation history ---
+    # --- Get prior conversation but filter out orchestrator assistant outputs ---
     history = get_conversation_history(audit_id)
+    filtered_history = [
+        m for m in history if not (m["role"] == "assistant" and m["domain"] == "orchestrator")
+    ]
 
-    # --- Save only true user input ---
+    # --- Save only real user answers ---
     if from_user and context.strip():
         save_message(audit_id, "orchestrator", "user", context)
 
-    # --- System prompt changes based on bootstrap ---
+    # --- System prompt ---
     if bootstrap:
         system_prompt = (
             "You are the Orchestrator Agent for a home energy audit.\n"
@@ -107,22 +110,21 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
             "You are the Orchestrator Agent for a home energy audit.\n"
             "User has provided new answers.\n"
             "Your task now:\n"
-            "1. Incorporate the new answers into context.\n"
-            "2. Ask insulation and siding agents for updated follow-up questions.\n"
+            "1. Incorporate ONLY the new user answers.\n"
+            "2. Call insulation and siding agents with the updated context.\n"
             "3. Produce ONLY a unified, deduplicated list of remaining follow-up questions.\n"
-            "Do not repeat the full summary unless explicitly asked."
+            "Do not repeat or regenerate a full summary unless explicitly asked."
         )
 
-    # --- Orchestrator messages ---
     messages = [
         {"role": "system", "content": system_prompt},
-        *[{"role": m["role"], "content": m["content"]} for m in history],
-        {"role": "user", "content": f"Context so far:\n{full_context}\n\n{context}"},
+        *[{"role": m["role"], "content": m["content"]} for m in filtered_history if m["role"] == "user"],
+        {"role": "user", "content": f"Context so far:\n{full_context}\n\nNew answer: {context}"},
     ]
 
     logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
 
-    # --- Step 1: Orchestrator decides relevance ---
+    # --- Step 1: Orchestrator reasoning ---
     orchestration_reply = call_llm(messages)
     logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
 
@@ -137,23 +139,23 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
         save_message(audit_id, "siding", "assistant", sid_reply)
         agent_replies.append(sid_reply)
 
-    # --- Step 3: Merge results ---
+    # --- Step 3: Merge agent outputs ---
     merge_prompt = [
         {
             "role": "system",
             "content": (
                 "You are the Orchestrator Agent merging multiple agent outputs.\n"
-                "On bootstrap: return one unified summary + unified deduplicated follow-up questions.\n"
-                "On later turns: return only an updated, unified list of remaining follow-up questions.\n"
-                "Do not repeat earlier summaries unless asked."
+                "On bootstrap: return one unified summary + unified follow-up questions.\n"
+                "On later turns: return only the updated unified list of follow-up questions.\n"
+                "Do not repeat earlier summaries unless explicitly asked."
             ),
         },
-        {"role": "user", "content": "\n\n".join([orchestration_reply] + agent_replies)},
+        {"role": "user", "content": "\n\n".join(agent_replies) or orchestration_reply},
     ]
 
     final_reply = call_llm(merge_prompt)
 
-    # --- Save orchestrator output ---
+    # --- Save orchestrator assistant reply ---
     save_message(audit_id, "orchestrator", "assistant", final_reply)
     logger.debug("✅ Final Orchestrator Reply Saved")
 
@@ -166,13 +168,13 @@ def agent_review():
     data = request.json
     audit_id = data.get("auditId")
     context = data.get("context", "")
-    bootstrap = data.get("bootstrap", False)
+    bootstrap = data.get("bootstrap", False)  # ✅ pick up flag
 
     if not audit_id:
         return jsonify({"error": "auditId required"}), 400
 
     try:
-        response = orchestration_agent(audit_id, context, from_user=not bootstrap, bootstrap=bootstrap)
+        response = orchestration_agent(audit_id, context, bootstrap=bootstrap)
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
