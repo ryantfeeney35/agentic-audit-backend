@@ -67,6 +67,15 @@ class AuditMedia(db.Model):
     audit = relationship('Audit', back_populates='media')
     step = relationship('AuditStep', back_populates='media')
 
+class AgentConversation(db.Model):
+    __tablename__ = "agent_conversations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, nullable=False)
+    domain = db.Column(db.String, nullable=False)
+    role = db.Column(db.String, nullable=False)   # system, user, assistant
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class AuditFinding(db.Model):
     __tablename__ = 'audit_findings'
