@@ -43,30 +43,50 @@ def call_llm(messages):
     return response.choices[0].message.content
 
 # --- Specialized agents ---
-def insulation_agent(context):
+def insulation_agent(context, bootstrap=False):
+    if bootstrap:
+        system_content = (
+            "You are the Insulation Agent. Only discuss insulation.\n"
+            "- Review provided context.\n"
+            "- Provide a short summary of insulation findings.\n"
+            "- List clear follow-up questions if info is incomplete.\n"
+            "- Do not make upgrade recommendations yet."
+        )
+    else:
+        system_content = (
+            "You are the Insulation Agent. Only discuss insulation.\n"
+            "- Do NOT summarize again.\n"
+            "- Only provide any NEW follow-up questions that remain unanswered.\n"
+            "- If no further questions, respond with: 'No further insulation questions.'"
+        )
     return call_llm([
-        {"role": "system", "content": (
-            "You are the Insulation Agent. Only discuss insulation. "
-            "If information is incomplete, ask clear follow-up questions. "
-            "If enough info is provided, summarize insulation findings (no recommendations yet)."
-        )},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": context},
     ])
 
-def siding_agent(context):
+def siding_agent(context, bootstrap=False):
+    if bootstrap:
+        system_content = (
+            "You are the Siding Agent. Only discuss siding and exterior walls.\n"
+            "- Review provided context.\n"
+            "- Provide a short summary of siding/exterior findings.\n"
+            "- List clear follow-up questions if info is incomplete.\n"
+            "- Do not make upgrade recommendations yet."
+        )
+    else:
+        system_content = (
+            "You are the Siding Agent. Only discuss siding and exterior walls.\n"
+            "- Do NOT summarize again.\n"
+            "- Only provide any NEW follow-up questions that remain unanswered.\n"
+            "- If no further questions, respond with: 'No further siding questions.'"
+        )
     return call_llm([
-        {"role": "system", "content": (
-            "You are the Siding Agent. Only discuss siding and exterior walls. "
-            "If information is incomplete, ask clear follow-up questions. "
-            "If enough info is provided, summarize siding findings (no recommendations yet)."
-        )},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": context},
     ])
 
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
-    from models import Audit, AuditStep, AuditMedia
-
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     property_obj = audit.property if audit else None
@@ -84,13 +104,13 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
 
     full_context = "\n".join(context_summary)
 
-    # --- Get prior conversation but filter out orchestrator assistant outputs ---
+    # --- Conversation history (filter orchestrator assistant summaries) ---
     history = get_conversation_history(audit_id)
     filtered_history = [
         m for m in history if not (m["role"] == "assistant" and m["domain"] == "orchestrator")
     ]
 
-    # --- Save only real user answers ---
+    # --- Save only true user input ---
     if from_user and context.strip():
         save_message(audit_id, "orchestrator", "user", context)
 
@@ -116,6 +136,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
             "Do not repeat or regenerate a full summary unless explicitly asked."
         )
 
+    # --- Orchestrator reasoning ---
     messages = [
         {"role": "system", "content": system_prompt},
         *[{"role": m["role"], "content": m["content"]} for m in filtered_history if m["role"] == "user"],
@@ -124,18 +145,17 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
 
     logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
 
-    # --- Step 1: Orchestrator reasoning ---
     orchestration_reply = call_llm(messages)
     logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
 
     # --- Step 2: Delegate to specialized agents ---
     agent_replies = []
     if "insulation" in orchestration_reply.lower():
-        ins_reply = insulation_agent(full_context + "\n" + context)
+        ins_reply = insulation_agent(full_context + "\n" + context, bootstrap=bootstrap)
         save_message(audit_id, "insulation", "assistant", ins_reply)
         agent_replies.append(ins_reply)
     if "siding" in orchestration_reply.lower():
-        sid_reply = siding_agent(full_context + "\n" + context)
+        sid_reply = siding_agent(full_context + "\n" + context, bootstrap=bootstrap)
         save_message(audit_id, "siding", "assistant", sid_reply)
         agent_replies.append(sid_reply)
 
@@ -145,8 +165,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
             "role": "system",
             "content": (
                 "You are the Orchestrator Agent merging multiple agent outputs.\n"
-                "On bootstrap: return one unified summary + unified follow-up questions.\n"
-                "On later turns: return only the updated unified list of follow-up questions.\n"
+                f"{'Bootstrap: return one unified summary + unified follow-up questions.' if bootstrap else 'Later turn: return ONLY the updated unified list of follow-up questions.'}\n"
                 "Do not repeat earlier summaries unless explicitly asked."
             ),
         },
@@ -162,8 +181,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False):
     return final_reply
 
 
-# --- Route ---
-@bp.route("/agent-review", methods=["POST"])
+# --- Routes ---
 @bp.route("/agent-review", methods=["POST"])
 def agent_review():
     data = request.json
@@ -175,7 +193,6 @@ def agent_review():
         return jsonify({"error": "auditId required"}), 400
 
     try:
-        # Mark user-provided context as from_user unless this is a bootstrap
         response = orchestration_agent(
             audit_id,
             context,
@@ -184,6 +201,7 @@ def agent_review():
         )
         return jsonify({"response": response})
     except Exception as e:
+        logger.exception("❌ Orchestration failed")
         return jsonify({"error": str(e)}), 500
 
 @bp.route("/agent-conversations/merged", methods=["GET"])
