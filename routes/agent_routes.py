@@ -189,23 +189,27 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
         final_reply = "✅ No further follow-up questions. Proceed to recommendations."
     else:
         merge_prompt = [
-    {
-        "role": "system",
-        "content": (
-            "You are the Orchestrator Agent merging outputs from insulation and siding agents.\n"
-            "Rules:\n"
-            "1. On bootstrap (first load): output ONE unified summary AND ONE unified, deduplicated list of follow-up questions.\n"
-            "2. On ALL later turns: output ONLY an updated, unified, deduplicated list of follow-up questions.\n"
-            "   - NEVER repeat or regenerate a summary.\n"
-            "   - NEVER add new domains (roofing, HVAC, etc.) unless an agent explicitly mentions them.\n"
-            "   - If all agents respond with 'No further ... questions', then output exactly:\n"
-            "     '✅ No further follow-up questions. Proceed to recommendations.'\n"
-            "3. Do not invent or repeat questions that were already answered.\n"
-            "4. Only merge what insulation/siding agents actually returned."
-        ),
-    },
-    {"role": "user", "content": "\n\n".join(agent_replies) or orchestration_reply},
-]
+            {
+                "role": "system",
+                "content": (
+                    "You are the Orchestrator Agent merging outputs from insulation and siding agents.\n"
+                    "Rules:\n"
+                    "1. On bootstrap (first load): output ONE unified summary AND ONE unified, deduplicated list of follow-up questions.\n"
+                    "2. On ALL later turns: output ONLY an updated, unified, deduplicated list of follow-up questions.\n"
+                    "   - NEVER output or include a summary of findings.\n"
+                    "   - If you attempt to include a summary, remove it.\n"
+                    "3. If all agents respond with 'No further ... questions', then output exactly:\n"
+                    "   '✅ No further follow-up questions. Proceed to recommendations.'\n"
+                    "4. Do not invent or repeat questions already answered.\n"
+                    "5. Only merge what insulation/siding agents actually returned.\n"
+                    "Output format must begin directly with either:\n"
+                    "   - '✅ No further follow-up questions...' OR\n"
+                    "   - 'Follow-up Questions:'\n"
+                    "Never start with 'Summary', 'Unified Summary', or similar."
+                ),
+            },
+            {"role": "user", "content": "\n\n".join(agent_replies) or orchestration_reply},
+        ]
         final_reply = call_llm(merge_prompt)
 
     # --- Save orchestrator assistant reply ---
