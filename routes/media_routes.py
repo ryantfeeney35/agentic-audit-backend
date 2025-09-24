@@ -1,3 +1,4 @@
+import shutil
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from models import AuditMedia, AuditStep, db
@@ -6,6 +7,7 @@ from supabase import create_client
 from openai import OpenAI
 import tempfile
 from threading import Thread
+import base64
 
 bp = Blueprint("media", __name__)
 
@@ -28,29 +30,121 @@ def summarize_image(url: str) -> str:
     )
     return resp.choices[0].message.content.strip()
 
+def extract_frames(video_path, out_dir, fps=0.2, max_frames=5):
+    """
+    Extract frames from video at ~1 frame every (1/fps) seconds.
+    Defaults: 0.2 fps = 1 frame every 5 seconds.
+    """
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-vf", f"fps={fps}",
+        os.path.join(out_dir, "frame_%03d.jpg")
+    ], check=True)
+
+    frame_files = sorted(os.listdir(out_dir))
+    if len(frame_files) > max_frames:
+        frame_files = frame_files[:max_frames]  # limit analysis
+    return [os.path.join(out_dir, f) for f in frame_files]
+
+def image_to_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
 def summarize_video(path: str) -> str:
-    audio_file = open(path, "rb")
-    transcript = client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=audio_file
-    )
-    text = transcript.text
-    resp = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=[
-            {"role": "system", "content": "You are an energy audit assistant. Summarize the key details visible or discussed in this video."},
-            {"role": "user", "content": text}
-        ]
-    )
-    return resp.choices[0].message.content.strip()
+    # --- Step 1: Transcribe audio ---
+    with open(path, "rb") as f:
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=f
+        ).text
+
+    # --- Step 2: Extract frames ---
+    out_dir = tempfile.mkdtemp()
+    frame_paths = extract_frames(path, out_dir)
+
+    try:
+        # --- Step 3: Summarize frames with GPT-4 Vision ---
+        frame_summaries = []
+        for fp in frame_paths:
+            b64_img = image_to_base64(fp)
+            resp = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an energy audit assistant. "
+                            "Analyze this video frame for siding, shading, insulation cues, or other building envelope details. "
+                            "Keep it concise and factual."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                            }
+                        ]
+                    }
+                ]
+            )
+            frame_summaries.append(resp.choices[0].message.content.strip())
+
+        # --- Step 4: Merge transcript + frame summaries ---
+        merged_resp = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an energy auditor assistant. "
+                        "Combine the homeowner's voiceover (transcript) with frame analyses into one cohesive, concise summary. "
+                        "Highlight key details for insulation, siding, shading, or other envelope/energy efficiency factors. "
+                        "Do not repeat verbatim text; synthesize into useful audit notes."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Transcript:\n{transcript}\n\n"
+                        f"Frame observations:\n" + "\n".join(frame_summaries)
+                    )
+                }
+            ]
+        )
+        return merged_resp.choices[0].message.content.strip()
+
+    finally:
+        # --- Always clean up temp frames ---
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 def summarize_audio(path: str) -> str:
-    audio_file = open(path, "rb")
-    transcript = client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=audio_file
+    # --- Step 1: Transcribe ---
+    with open(path, "rb") as f:
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=f
+        ).text
+
+    # --- Step 2: Summarize transcript into clean audit note ---
+    summary_resp = client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an energy auditor assistant. "
+                    "Summarize the homeowner's statements clearly and concisely. "
+                    "Highlight comfort issues, planned upgrades, and any contextual insights. "
+                    "Do not just repeat verbatim text; condense into professional notes."
+                )
+            },
+            {"role": "user", "content": transcript}
+        ]
     )
-    return transcript.text
+
+    return summary_resp.choices[0].message.content.strip()
 
 # ✅ background processor with real app context
 def process_media_async(app, media_id: int, tmp_path: str, public_url: str, media_type: str):
