@@ -8,6 +8,7 @@ from openai import OpenAI
 import tempfile
 from threading import Thread
 import base64
+import subprocess
 
 bp = Blueprint("media", __name__)
 
