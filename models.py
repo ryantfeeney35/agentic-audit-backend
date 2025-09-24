@@ -62,6 +62,7 @@ class AuditMedia(db.Model):
     file_name = db.Column(db.String, nullable=True)
     media_type = db.Column(db.String, nullable=True)  # e.g., 'photo', 'video'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    summary = db.Column(db.Text)  
 
     # Relationships
     audit = relationship('Audit', back_populates='media')

@@ -126,6 +126,9 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     for step in steps:
         notes = step.notes or ""
         context_summary.append(f"{step.label} ({step.step_type}) - Notes: {notes}")
+        for media in step.media:
+            if media.summary:
+                context_summary.append(f"{step.label} media summary: {media.summary}")
 
     full_context = "\n".join(context_summary)
 

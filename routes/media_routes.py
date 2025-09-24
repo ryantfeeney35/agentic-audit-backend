@@ -3,6 +3,7 @@ from werkzeug.utils import secure_filename
 from models import AuditMedia, AuditStep, db
 import os
 from supabase import create_client
+from openai import OpenAI
 
 bp = Blueprint("media", __name__)
 
@@ -12,6 +13,40 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def analyze_media(file_url: str, mimetype: str) -> str | None:
+    """Analyze uploaded image/video and return a concise summary for audit context."""
+    if not (mimetype.startswith("image/") or mimetype.startswith("video/")):
+        return None
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an energy audit assistant. Analyze the uploaded media "
+                        "and provide a concise factual description relevant to an energy audit. "
+                        "Focus on observable details (materials, condition, visible issues). "
+                        "Do NOT give upgrade recommendations."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Please describe this media for an energy audit."},
+                        {"type": "image_url", "image_url": {"url": file_url}},
+                    ],
+                },
+            ],
+            max_tokens=150,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ Media analysis failed: {e}")
+        return None
 
 # --- Upload media by step_id ---
 @bp.route('/steps/<int:step_id>/upload', methods=['POST'])
@@ -90,7 +125,7 @@ def upload_media_by_step_label(audit_id, step_label):
     # Find or create the step
     step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
     if step:
-        if step.step_type != step_type:  # ✅ fix step_type if wrong
+        if step.step_type != step_type:
             step.step_type = step_type
             db.session.commit()
     else:
@@ -99,12 +134,16 @@ def upload_media_by_step_label(audit_id, step_label):
         db.session.commit()
 
     try:
+        # Upload to Supabase
         supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
             path=filename,
             file=file_content,
             file_options={"content-type": file.mimetype}
         )
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+        # ✅ Auto-analyze image/video
+        summary = analyze_media(public_url, file.mimetype)
 
         media = AuditMedia(
             audit_id=audit_id,
@@ -113,7 +152,8 @@ def upload_media_by_step_label(audit_id, step_label):
             side=step.label.replace(" Side", ""),
             media_url=public_url,
             file_name=file.filename,
-            media_type=media_type
+            media_type=media_type,
+            summary=summary,  # ✅ new field
         )
         db.session.add(media)
         db.session.commit()
@@ -121,7 +161,8 @@ def upload_media_by_step_label(audit_id, step_label):
         return jsonify({
             "message": "Uploaded",
             "media_url": public_url,
-            "step_id": step.id
+            "step_id": step.id,
+            "summary": summary,  # ✅ return summary to frontend too
         }), 201
 
     except Exception as e:
