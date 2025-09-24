@@ -43,10 +43,11 @@ def call_llm(messages):
     return response.choices[0].message.content
 
 # --- Specialized agents ---
+# --- Specialized agents ---
 def insulation_agent(context, bootstrap=False):
     if bootstrap:
         system_content = (
-            "You are the Insulation Agent. Only discuss insulation.\n"
+            "You are the Insulation Agent. Focus ONLY on insulation.\n"
             "- Review provided context.\n"
             "- Provide a short summary of insulation findings.\n"
             "- List clear follow-up questions if info is incomplete.\n"
@@ -54,10 +55,11 @@ def insulation_agent(context, bootstrap=False):
         )
     else:
         system_content = (
-            "You are the Insulation Agent. Only discuss insulation.\n"
-            "- Do NOT summarize again.\n"
-            "- Only provide any NEW follow-up questions that remain unanswered.\n"
-            "- If no further questions, respond exactly with: 'No further insulation questions.'"
+            "You are the Insulation Agent. Focus ONLY on insulation.\n"
+            "- DO NOT summarize.\n"
+            "- DO NOT repeat previously answered questions.\n"
+            "- ONLY output NEW follow-up questions that remain unanswered.\n"
+            "- If you have no further questions, respond exactly with: 'No further insulation questions.'"
         )
     return call_llm([
         {"role": "system", "content": system_content},
@@ -67,7 +69,7 @@ def insulation_agent(context, bootstrap=False):
 def siding_agent(context, bootstrap=False):
     if bootstrap:
         system_content = (
-            "You are the Siding Agent. Only discuss siding and exterior walls.\n"
+            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
             "- Review provided context.\n"
             "- Provide a short summary of siding/exterior findings.\n"
             "- List clear follow-up questions if info is incomplete.\n"
@@ -75,10 +77,33 @@ def siding_agent(context, bootstrap=False):
         )
     else:
         system_content = (
-            "You are the Siding Agent. Only discuss siding and exterior walls.\n"
-            "- Do NOT summarize again.\n"
-            "- Only provide any NEW follow-up questions that remain unanswered.\n"
-            "- If no further questions, respond exactly with: 'No further siding questions.'"
+            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
+            "- DO NOT summarize.\n"
+            "- DO NOT repeat previously answered questions.\n"
+            "- ONLY output NEW follow-up questions that remain unanswered.\n"
+            "- If you have no further questions, respond exactly with: 'No further siding questions.'"
+        )
+    return call_llm([
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": context},
+    ])
+
+def siding_agent(context, bootstrap=False):
+    if bootstrap:
+        system_content = (
+            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
+            "- Review provided context.\n"
+            "- Provide a short summary of siding/exterior findings.\n"
+            "- List clear follow-up questions if info is incomplete.\n"
+            "- Do not make upgrade recommendations yet."
+        )
+    else:
+        system_content = (
+            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
+            "- DO NOT summarize.\n"
+            "- DO NOT repeat previously answered questions.\n"
+            "- ONLY output NEW follow-up questions that remain unanswered.\n"
+            "- If you have no further questions, respond exactly with: 'No further siding questions.'"
         )
     return call_llm([
         {"role": "system", "content": system_content},
@@ -104,7 +129,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 
     full_context = "\n".join(context_summary)
 
-    # --- Conversation history (filter orchestrator assistant summaries) ---
+    # --- Conversation history (exclude orchestrator assistant summaries) ---
     history = get_conversation_history(audit_id)
     filtered_history = [
         m for m in history if not (m["role"] == "assistant" and m["domain"] == "orchestrator")
@@ -118,11 +143,11 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     if bootstrap:
         system_prompt = (
             "You are the Orchestrator Agent for a home energy audit.\n"
-            "On first load (bootstrap):\n"
+            "Bootstrap mode:\n"
             "1. Review all context (interview, notes, utility bill, photos).\n"
             "2. Call insulation and siding agents.\n"
-            "3. Produce ONE unified summary of findings.\n"
-            "4. Produce ONE unified, deduplicated list of follow-up questions.\n"
+            "3. Return ONE unified summary of findings.\n"
+            "4. Return ONE unified, deduplicated list of follow-up questions.\n"
             "Do not generate upgrade recommendations yet."
         )
     else:
@@ -131,35 +156,36 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
             "User has provided new answers.\n"
             "Your task now:\n"
             "1. Incorporate ONLY the new user answers.\n"
-            "2. Call insulation and siding agents with the updated context.\n"
-            "3. Produce ONLY a unified, deduplicated list of remaining follow-up questions.\n"
-            "4. Do not repeat or regenerate a full summary unless explicitly asked."
+            "2. Call insulation and siding agents with updated context.\n"
+            "3. Return ONLY a unified, deduplicated list of remaining follow-up questions.\n"
+            "Do NOT include a summary unless bootstrap=True.\n"
+            "Do NOT invent new domains or questions."
         )
 
+    # --- Orchestrator reasoning ---
     messages = [
         {"role": "system", "content": system_prompt},
         *[{"role": m["role"], "content": m["content"]} for m in filtered_history if m["role"] == "user"],
-        {"role": "user", "content": f"Context so far:\n{full_context}\n\nNew answer: {user_answer or context}"},
+        {"role": "user", "content": f"Context so far:\n{full_context}\n\nNew answer: {context}"},
     ]
 
     logger.debug("📥 Orchestrator Input Messages:\n%s", messages)
-
     orchestration_reply = call_llm(messages)
     logger.debug("🤖 Orchestrator Raw Reply: %s", orchestration_reply)
 
     # --- Step 2: Delegate to specialized agents ---
     agent_replies = []
     if "insulation" in orchestration_reply.lower():
-        ins_reply = insulation_agent(full_context + "\n" + (user_answer or context), bootstrap=bootstrap)
+        ins_reply = insulation_agent(full_context + "\n" + context, bootstrap=bootstrap)
         save_message(audit_id, "insulation", "assistant", ins_reply)
         agent_replies.append(ins_reply)
     if "siding" in orchestration_reply.lower():
-        sid_reply = siding_agent(full_context + "\n" + (user_answer or context), bootstrap=bootstrap)
+        sid_reply = siding_agent(full_context + "\n" + context, bootstrap=bootstrap)
         save_message(audit_id, "siding", "assistant", sid_reply)
         agent_replies.append(sid_reply)
 
     # --- Step 3: Merge agent outputs ---
-    if agent_replies and all("no further" in r.lower() for r in agent_replies):
+    if not agent_replies:
         final_reply = "✅ No further follow-up questions. Proceed to recommendations."
     else:
         merge_prompt = [
@@ -168,16 +194,18 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
                 "content": (
                     "You are the Orchestrator Agent merging multiple agent outputs.\n"
                     "Rules:\n"
-                    "1. ONLY consider insulation and siding agent replies.\n"
-                    "2. If both agents say 'No further questions', output:\n"
-                    "   '✅ No further follow-up questions. Proceed to recommendations.'\n"
-                    "3. If one or both agents still have follow-up questions, merge them into ONE unified, deduplicated list.\n"
-                    "4. Do NOT add new domains (roofing, HVAC, windows, etc.).\n"
-                    "5. On bootstrap: include a unified summary + follow-up questions.\n"
-                    "6. On later turns: include ONLY the updated list of follow-up questions."
+                    "1. On bootstrap: output ONE unified summary + ONE deduplicated list of follow-up questions.\n"
+                    "2. On later turns: output ONLY a unified, deduplicated list of follow-up questions.\n"
+                    "3. Never repeat or regenerate summaries unless bootstrap=True.\n"
+                    "4. Never invent new domains or questions not provided by the agents.\n"
+                    "5. If all agents say 'No further ... questions', output exactly:\n"
+                    "   '✅ No further follow-up questions. Proceed to recommendations.'"
                 ),
             },
-            {"role": "user", "content": "\n\n".join(agent_replies)},
+            {
+                "role": "user",
+                "content": "\n\n".join(agent_replies),
+            },
         ]
         final_reply = call_llm(merge_prompt)
 
