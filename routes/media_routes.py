@@ -4,6 +4,8 @@ from models import AuditMedia, AuditStep, db
 import os
 from supabase import create_client
 from openai import OpenAI
+import tempfile
+import subprocess
 
 bp = Blueprint("media", __name__)
 
@@ -15,38 +17,130 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def analyze_media(file_url: str, mimetype: str) -> str | None:
-    """Analyze uploaded image/video and return a concise summary for audit context."""
-    if not (mimetype.startswith("image/") or mimetype.startswith("video/")):
-        return None
+def summarize_image(public_url: str) -> str:
+    return client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[
+            {"role": "system", "content": "You are an energy audit assistant. Describe defects, materials, and conditions relevant to insulation, siding, or energy performance."},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": public_url}}]},
+        ],
+    ).choices[0].message.content
+
+def transcribe_audio(path: str) -> str:
+    with open(path, "rb") as af:
+        result = client.audio.transcriptions.create(
+            model="gpt-4o-mini-transcribe",
+            file=af
+        )
+    return result.text
+
+def summarize_text(text: str) -> str:
+    return client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[
+            {"role": "system", "content": "Summarize homeowner comments or observations for energy audit context."},
+            {"role": "user", "content": text},
+        ],
+    ).choices[0].message.content
+
+def summarize_video(path: str, base_filename: str, audit_id: int, step_label: str) -> str:
+    # Extract audio
+    audio_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.mp3")
+    subprocess.run(["ffmpeg", "-i", path, "-q:a", "0", "-map", "a", audio_path], check=True)
+
+    transcript = transcribe_audio(audio_path) if os.path.exists(audio_path) else ""
+
+    # Extract frames every 5 seconds
+    frame_pattern = os.path.join(tempfile.gettempdir(), f"{base_filename}_frame_%03d.jpg")
+    subprocess.run(["ffmpeg", "-i", path, "-vf", "fps=1/5", frame_pattern], check=True)
+
+    frame_urls = []
+    for fname in os.listdir(tempfile.gettempdir()):
+        if fname.startswith(f"{base_filename}_frame_") and fname.endswith(".jpg"):
+            fpath = os.path.join(tempfile.gettempdir(), fname)
+            with open(fpath, "rb") as f:
+                supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(
+                    f"{audit_id}_{step_label}_{fname}", f
+                )
+            url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{audit_id}_{step_label}_{fname}"
+            frame_urls.append(url)
+
+    # Summarize frames + transcript
+    vision_input = [{"type": "image_url", "image_url": {"url": url}} for url in frame_urls]
+    if transcript:
+        vision_input.append({"type": "text", "text": f"Transcript: {transcript}"})
+
+    return client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[
+            {"role": "system", "content": "You are an energy auditor. Summarize what this video shows about insulation, siding, or energy performance."},
+            {"role": "user", "content": vision_input},
+        ],
+    ).choices[0].message.content
+
+
+@bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
+def upload_media_by_step_label(audit_id, step_label):
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    filename = secure_filename(f"{audit_id}_{step_label}_{file.filename}")
+    file_content = file.read()
+
+    step_type = request.form.get('step_type', 'exterior')
+    media_type = request.form.get('media_type', 'photo')  # photo | video | audio
+
+    # Ensure step exists
+    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
+    if not step:
+        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
+        db.session.add(step)
+        db.session.commit()
 
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an energy audit assistant. Analyze the uploaded media "
-                        "and provide a concise factual description relevant to an energy audit. "
-                        "Focus on observable details (materials, condition, visible issues). "
-                        "Do NOT give upgrade recommendations."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Please describe this media for an energy audit."},
-                        {"type": "image_url", "image_url": {"url": file_url}},
-                    ],
-                },
-            ],
-            max_tokens=150,
+        # Save original file to Supabase
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(filename, file_content)
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+        summary_text = ""
+
+        # Save temp file for processing videos/audio
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
+        with open(tmp_path, "wb") as f:
+            f.write(file_content)
+
+        if media_type == "photo":
+            summary_text = summarize_image(public_url)
+        elif media_type == "video":
+            summary_text = summarize_video(tmp_path, filename, audit_id, step_label)
+        elif media_type == "audio":
+            transcript = transcribe_audio(tmp_path)
+            summary_text = summarize_text(transcript)
+
+        media = AuditMedia(
+            audit_id=audit_id,
+            step_id=step.id,
+            step_type=step.step_type,
+            side=step.label.replace(" Side", ""),
+            media_url=public_url,
+            file_name=file.filename,
+            media_type=media_type,
+            summary=summary_text
         )
-        return resp.choices[0].message.content.strip()
+        db.session.add(media)
+        db.session.commit()
+
+        return jsonify({
+            "message": "Uploaded",
+            "media_url": public_url,
+            "summary": summary_text,
+            "step_id": step.id
+        }), 201
+
     except Exception as e:
-        print(f"⚠️ Media analysis failed: {e}")
-        return None
+        print(f"❌ Upload failed: {e}")
+        return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
 
 # --- Upload media by step_id ---
 @bp.route('/steps/<int:step_id>/upload', methods=['POST'])
@@ -106,65 +200,3 @@ def get_audit_media(audit_id):
         "media_type": m.media_type,
         "created_at": m.created_at.isoformat()
     } for m in media])
-
-
-# --- Upload media by step label ---
-@bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
-def upload_media_by_step_label(audit_id, step_label):
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-
-    file = request.files['file']
-    filename = secure_filename(f"{audit_id}_{step_label}_{file.filename}")
-    file_content = file.read()
-
-    # Parse step_type and media_type from form
-    step_type = request.form.get('step_type', 'exterior')
-    media_type = request.form.get('media_type', 'photo')
-
-    # Find or create the step
-    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
-    if step:
-        if step.step_type != step_type:
-            step.step_type = step_type
-            db.session.commit()
-    else:
-        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
-        db.session.add(step)
-        db.session.commit()
-
-    try:
-        # Upload to Supabase
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
-            path=filename,
-            file=file_content,
-            file_options={"content-type": file.mimetype}
-        )
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
-
-        # ✅ Auto-analyze image/video
-        summary = analyze_media(public_url, file.mimetype)
-
-        media = AuditMedia(
-            audit_id=audit_id,
-            step_id=step.id,
-            step_type=step.step_type,
-            side=step.label.replace(" Side", ""),
-            media_url=public_url,
-            file_name=file.filename,
-            media_type=media_type,
-            summary=summary,  # ✅ new field
-        )
-        db.session.add(media)
-        db.session.commit()
-
-        return jsonify({
-            "message": "Uploaded",
-            "media_url": public_url,
-            "step_id": step.id,
-            "summary": summary,  # ✅ return summary to frontend too
-        }), 201
-
-    except Exception as e:
-        print(f"❌ Upload failed: {e}")
-        return jsonify({'error': 'Upload failed'}), 500
