@@ -131,24 +131,26 @@ def handle_interview(audit_id):
     finally:
         os.remove(temp_path)
 
-    # Step 4: Save step + media
+    # Step 4: Save step (no full transcript/summary in notes)
     step = AuditStep(
         audit_id=audit_id,
         step_type='interview',
         label='Initial Interview',
-        notes=summary,
+        notes="Interview completed",   # ✅ keep this short
         is_completed=True
     )
     db.session.add(step)
     db.session.commit()
 
+    # Step 5: Save media w/ transcript+summary
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
         step_type='interview',
         file_name=secure_filename(file.filename),
         media_type='audio',
-        media_url=file_url
+        media_url=file_url,
+        summary=summary   # ✅ put summary here
     )
     db.session.add(media)
     db.session.commit()
@@ -157,5 +159,6 @@ def handle_interview(audit_id):
         'transcript': transcript,
         'summary': summary,
         'media_url': file_url,
-        'step_id': step.id
+        'step_id': step.id,
+        'media_id': media.id
     })

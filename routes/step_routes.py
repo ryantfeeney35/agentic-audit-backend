@@ -103,6 +103,7 @@ def get_media_by_step_label(audit_id, step_label):
             "media_url": m.media_url,
             "file_name": m.file_name,
             "media_type": m.media_type,
+            "summary": m.summary,  # ✅ include summary
             "created_at": m.created_at.isoformat(),
             "not_accessible": step.not_accessible
         } for m in media_items
