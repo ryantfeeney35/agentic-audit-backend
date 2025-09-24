@@ -254,14 +254,18 @@ def get_merged_conversation():
         .all()
     )
 
+    # ✅ Only include orchestrator (assistant/system) and user messages
     merged = [
         {
             "role": r.role,
+            "domain": r.domain,
             "content": r.content,
             "created_at": r.created_at.isoformat()
         }
-        for r in rows if r.role in ["system", "user", "assistant"]
+        for r in rows
+        if r.domain == "orchestrator" or r.role == "user"
     ]
+
     return jsonify(merged)
 
 @bp.route("/agent-conversations", methods=["POST"])
