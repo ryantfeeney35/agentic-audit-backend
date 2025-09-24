@@ -1,10 +1,10 @@
-from flask import Blueprint, request, jsonify, current_app
+ffrom flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from models import AuditMedia, AuditStep, db
 import os
-import tempfile
 from supabase import create_client
 from openai import OpenAI
+import tempfile
 from threading import Thread
 
 bp = Blueprint("media", __name__)
@@ -29,12 +29,11 @@ def summarize_image(url: str) -> str:
     return resp.choices[0].message.content.strip()
 
 def summarize_video(path: str) -> str:
-    # transcribe + summarize
-    with open(path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=audio_file
-        )
+    audio_file = open(path, "rb")
+    transcript = client.audio.transcriptions.create(
+        model="gpt-4o-transcribe",
+        file=audio_file
+    )
     text = transcript.text
     resp = client.chat.completions.create(
         model="gpt-4.1",
@@ -46,16 +45,16 @@ def summarize_video(path: str) -> str:
     return resp.choices[0].message.content.strip()
 
 def summarize_audio(path: str) -> str:
-    with open(path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=audio_file
-        )
+    audio_file = open(path, "rb")
+    transcript = client.audio.transcriptions.create(
+        model="gpt-4o-transcribe",
+        file=audio_file
+    )
     return transcript.text
 
-# --- async worker ---
-def process_media_async(media_id: int, tmp_path: str, public_url: str, media_type: str):
-    with current_app.app_context():  # ✅ fix context issue
+# ✅ background processor with real app context
+def process_media_async(app, media_id: int, tmp_path: str, public_url: str, media_type: str):
+    with app.app_context():  # push proper app context
         summary = "❌ Processing failed"
         try:
             if media_type == "photo":
@@ -68,13 +67,11 @@ def process_media_async(media_id: int, tmp_path: str, public_url: str, media_typ
         except Exception as e:
             summary = f"❌ Failed to process: {e}"
 
-        # update DB once done
         media = AuditMedia.query.get(media_id)
         if media:
             media.summary = summary
             db.session.commit()
 
-# --- Upload by step label ---
 @bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 def upload_media_by_step_label(audit_id, step_label):
     if 'file' not in request.files:
@@ -112,7 +109,7 @@ def upload_media_by_step_label(audit_id, step_label):
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
-            summary="⏳ Processing…"  # placeholder
+            summary="Processing…"  # placeholder
         )
         db.session.add(media)
         db.session.commit()
@@ -122,11 +119,10 @@ def upload_media_by_step_label(audit_id, step_label):
         with open(tmp_path, "wb") as f:
             f.write(file_content)
 
-        # spawn async summarization
+        # spawn async summarization with app context
         Thread(
             target=process_media_async,
-            args=(media.id, tmp_path, public_url, media_type),
-            daemon=True
+            args=(current_app._get_current_object(), media.id, tmp_path, public_url, media_type)
         ).start()
 
         return jsonify({
@@ -157,7 +153,11 @@ def upload_step_media(step_id):
     media_type = request.form.get('media_type', 'photo')
 
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(filename, file_content)
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
+            path=filename,
+            file=file_content,
+            file_options={"content-type": file.mimetype}
+        )
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
@@ -168,12 +168,12 @@ def upload_step_media(step_id):
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
-            summary="⏳ Processing…"
+            summary="Processing…"  # keep consistent
         )
         db.session.add(media)
         db.session.commit()
 
-        return jsonify({"url": public_url, "summary": media.summary}), 201
+        return jsonify({"url": public_url}), 201
 
     except Exception as e:
         print(f"❌ Upload failed: {e}")
