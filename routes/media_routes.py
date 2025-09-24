@@ -1,4 +1,4 @@
-ffrom flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from models import AuditMedia, AuditStep, db
 import os
