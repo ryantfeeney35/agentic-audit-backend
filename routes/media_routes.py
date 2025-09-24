@@ -1,11 +1,10 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from models import AuditMedia, AuditStep, db
 import os
+import tempfile
 from supabase import create_client
 from openai import OpenAI
-import tempfile
-import subprocess
 from threading import Thread
 
 bp = Blueprint("media", __name__)
@@ -31,11 +30,11 @@ def summarize_image(url: str) -> str:
 
 def summarize_video(path: str) -> str:
     # transcribe + summarize
-    audio_file = open(path, "rb")
-    transcript = client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=audio_file
-    )
+    with open(path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=audio_file
+        )
     text = transcript.text
     resp = client.chat.completions.create(
         model="gpt-4.1",
@@ -47,32 +46,35 @@ def summarize_video(path: str) -> str:
     return resp.choices[0].message.content.strip()
 
 def summarize_audio(path: str) -> str:
-    audio_file = open(path, "rb")
-    transcript = client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=audio_file
-    )
+    with open(path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=audio_file
+        )
     return transcript.text
 
+# --- async worker ---
 def process_media_async(media_id: int, tmp_path: str, public_url: str, media_type: str):
-    summary = "❌ Processing failed"
-    try:
-        if media_type == "photo":
-            summary = summarize_image(public_url)
-        elif media_type == "video":
-            summary = summarize_video(tmp_path)
-        elif media_type == "audio":
-            transcript = summarize_audio(tmp_path)
-            summary = f"Audio transcript: {transcript}"
-    except Exception as e:
-        summary = f"❌ Failed to process: {e}"
+    with current_app.app_context():  # ✅ fix context issue
+        summary = "❌ Processing failed"
+        try:
+            if media_type == "photo":
+                summary = summarize_image(public_url)
+            elif media_type == "video":
+                summary = summarize_video(tmp_path)
+            elif media_type == "audio":
+                transcript = summarize_audio(tmp_path)
+                summary = f"Audio transcript: {transcript}"
+        except Exception as e:
+            summary = f"❌ Failed to process: {e}"
 
-    # update DB once done
-    media = AuditMedia.query.get(media_id)
-    if media:
-        media.summary = summary
-        db.session.commit()
+        # update DB once done
+        media = AuditMedia.query.get(media_id)
+        if media:
+            media.summary = summary
+            db.session.commit()
 
+# --- Upload by step label ---
 @bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 def upload_media_by_step_label(audit_id, step_label):
     if 'file' not in request.files:
@@ -110,7 +112,7 @@ def upload_media_by_step_label(audit_id, step_label):
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
-            summary="Processing…"  # immediate placeholder
+            summary="⏳ Processing…"  # placeholder
         )
         db.session.add(media)
         db.session.commit()
@@ -121,7 +123,11 @@ def upload_media_by_step_label(audit_id, step_label):
             f.write(file_content)
 
         # spawn async summarization
-        Thread(target=process_media_async, args=(media.id, tmp_path, public_url, media_type)).start()
+        Thread(
+            target=process_media_async,
+            args=(media.id, tmp_path, public_url, media_type),
+            daemon=True
+        ).start()
 
         return jsonify({
             "id": media.id,
@@ -144,7 +150,6 @@ def upload_step_media(step_id):
     filename = f'step_{step_id}_{secure_filename(file.filename)}'
     file_content = file.read()
 
-    # Fetch the step so we can link properly
     step = AuditStep.query.get(step_id)
     if not step:
         return jsonify({'error': 'Step not found'}), 404
@@ -152,11 +157,7 @@ def upload_step_media(step_id):
     media_type = request.form.get('media_type', 'photo')
 
     try:
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
-            path=filename,
-            file=file_content,
-            file_options={"content-type": file.mimetype}
-        )
+        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(filename, file_content)
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
         media = AuditMedia(
@@ -166,17 +167,17 @@ def upload_step_media(step_id):
             side=step.label.replace(" Side", ""),
             media_url=public_url,
             file_name=file.filename,
-            media_type=media_type
+            media_type=media_type,
+            summary="⏳ Processing…"
         )
         db.session.add(media)
         db.session.commit()
 
-        return jsonify({"url": public_url}), 201
+        return jsonify({"url": public_url, "summary": media.summary}), 201
 
     except Exception as e:
         print(f"❌ Upload failed: {e}")
         return jsonify({'error': 'Upload failed'}), 500
-
 
 # --- Get all media for an audit ---
 @bp.route('/audits/<int:audit_id>/media', methods=['GET'])
@@ -190,5 +191,23 @@ def get_audit_media(audit_id):
         "media_url": m.media_url,
         "file_name": m.file_name,
         "media_type": m.media_type,
+        "summary": m.summary,
+        "created_at": m.created_at.isoformat()
+    } for m in media])
+
+# --- Get media for a specific step ---
+@bp.route('/steps/<int:step_id>/media', methods=['GET'])
+def get_step_media(step_id):
+    media = AuditMedia.query.filter_by(step_id=step_id).all()
+    return jsonify([{
+        "id": m.id,
+        "audit_id": m.audit_id,
+        "step_id": m.step_id,
+        "step_type": m.step_type,
+        "side": m.side,
+        "media_url": m.media_url,
+        "file_name": m.file_name,
+        "media_type": m.media_type,
+        "summary": m.summary,
         "created_at": m.created_at.isoformat()
     } for m in media])
