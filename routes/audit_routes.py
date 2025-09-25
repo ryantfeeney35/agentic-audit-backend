@@ -5,11 +5,82 @@ from openai import OpenAI
 from supabase_utils import upload_to_supabase_and_get_url
 import os
 import tempfile
+import fitz  # PyMuPDF
+import base64
+import json
 
 bp = Blueprint("audits", __name__)
 
 # OpenAI client (requires OPENAI_API_KEY in env)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --- Helper: Extract usage from bill ---
+def extract_usage_from_bill(pdf_path: str):
+    """
+    Extract annual usage (total + TOU breakdown) from a utility bill PDF.
+
+    Returns structured JSON.
+    """
+    doc = fitz.open(pdf_path)
+    # ⚠️ Adjust page index if chart lives on another page
+    page = doc[0]
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # render high-res
+    img_bytes = pix.tobytes("png")
+    img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+    prompt = """
+    You are an energy audit assistant.
+    The image is from a utility bill showing ANNUAL USAGE with monthly totals and 
+    a Time-of-Use (TOU) split: On-Peak, Off-Peak, Super Off-Peak.
+
+    Extract the data into structured JSON with this schema:
+
+    {
+      "annual_usage": [
+        {
+          "month": "MMM YYYY",
+          "total_kWh": int,
+          "on_peak_kWh": int,
+          "off_peak_kWh": int,
+          "super_off_peak_kWh": int
+        }
+      ],
+      "summary": {
+        "yearly_total_kWh": int,
+        "average_monthly_kWh": int,
+        "peak_month": "MMM YYYY (X kWh)",
+        "lowest_month": "MMM YYYY (X kWh)",
+        "tou_split_percentages": {
+          "on_peak": "X%",
+          "off_peak": "X%",
+          "super_off_peak": "X%"
+        },
+        "insights": "short narrative about usage trends"
+      }
+    }
+
+    Only return valid JSON, no commentary.
+    """
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You extract structured data from images of utility bills."},
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+            ]}
+        ],
+        temperature=0.0,
+    )
+
+    text = resp.choices[0].message.content
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = {"summary": "⚠️ Failed to parse structured JSON", "raw_output": text}
+
+    return data
 
 # --- Routes ---
 
@@ -87,16 +158,13 @@ def handle_interview(audit_id):
 
     # Step 1: Transcribe audio with Whisper
     try:
-        print("🔍 Transcribing with Whisper...")
         with open(temp_path, "rb") as f:
             transcript_resp = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f
             )
         transcript = transcript_resp.text
-        print("✅ Transcript:", transcript[:100])
     except Exception as e:
-        print("❌ Transcription failed:", str(e))
         os.remove(temp_path)
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
@@ -113,13 +181,11 @@ def handle_interview(audit_id):
             ]
         )
         summary = summary_resp.choices[0].message.content
-        print("✅ Summary generated:", summary[:200])
     except Exception as e:
-        print("❌ Summarization failed:", str(e))
         os.remove(temp_path)
         return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
 
-    # Step 3: Upload audio file to Supabase
+    # Step 3: Upload audio file
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
@@ -131,18 +197,17 @@ def handle_interview(audit_id):
     finally:
         os.remove(temp_path)
 
-    # Step 4: Save step (no full transcript/summary in notes)
+    # Step 4: Save step + media
     step = AuditStep(
         audit_id=audit_id,
         step_type='interview',
         label='Initial Interview',
-        notes="Interview completed",   # ✅ keep this short
+        notes="Interview completed",
         is_completed=True
     )
     db.session.add(step)
     db.session.commit()
 
-    # Step 5: Save media w/ transcript+summary
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
@@ -150,7 +215,7 @@ def handle_interview(audit_id):
         file_name=secure_filename(file.filename),
         media_type='audio',
         media_url=file_url,
-        summary=summary   # ✅ put summary here
+        summary=summary
     )
     db.session.add(media)
     db.session.commit()
@@ -163,13 +228,14 @@ def handle_interview(audit_id):
         'media_id': media.id
     })
 
+
 @bp.route('/audits/<int:audit_id>/utility-bill', methods=['POST'])
 def handle_utility_bill(audit_id):
     file = request.files.get('file')
     if not file:
         return jsonify({'error': 'Missing utility bill file'}), 400
 
-    # Save temp file
+    # Save temp PDF
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
         file.save(tmp.name)
         temp_path = tmp.name
@@ -184,29 +250,20 @@ def handle_utility_bill(audit_id):
             media_type='document',
             step_type='interview'
         )
+    except Exception as e:
+        os.remove(temp_path)
+        return jsonify({'error': 'Upload to Supabase failed', 'details': str(e)}), 500
+
+    # Step 2: Extract structured usage from PDF
+    try:
+        analysis = extract_usage_from_bill(temp_path)
+        summary = json.dumps(analysis, indent=2)
+    except Exception as e:
+        summary = f"⚠️ Failed to analyze bill: {e}"
     finally:
         os.remove(temp_path)
 
-    # Step 2: Summarize utility bill (simple LLM summary)
-    try:
-        summary_resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "You are an energy auditor assistant. Summarize the contents "
-                    "of this utility bill in concise, professional language. "
-                    "Focus on billing period, total charges, usage trends if visible."
-                )},
-                {"role": "user", "content": f"Utility bill file uploaded at {file_url}"}
-            ]
-        )
-        summary = summary_resp.choices[0].message.content
-        print("✅ Utility Bill Summary generated:", summary[:200])
-    except Exception as e:
-        print("❌ Summarization failed:", str(e))
-        summary = "⚠️ Failed to summarize utility bill."
-
-    # Step 3: Save a new AuditStep
+    # Step 3: Save new AuditStep + AuditMedia
     step = AuditStep(
         audit_id=audit_id,
         step_type='interview',
@@ -217,7 +274,6 @@ def handle_utility_bill(audit_id):
     db.session.add(step)
     db.session.commit()
 
-    # Step 4: Save media w/ summary
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,

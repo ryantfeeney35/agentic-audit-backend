@@ -116,19 +116,35 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     property_obj = audit.property if audit else None
 
-    # --- Build context ---
+        # --- Build context ---
     context_summary = []
+
+    # Property details
+    if property_obj:
+        address = f"{property_obj.street}, {property_obj.city}, {property_obj.state} {property_obj.zip_code}"
+        sqft = f"{property_obj.sqft} sqft" if property_obj.sqft else "sqft unknown"
+        year = f"Year built: {property_obj.year_built}" if property_obj.year_built else "Year built unknown"
+        context_summary.append(f"Property: {address}, {sqft}, {year}")
+
+    # Interview summary (from audit.notes if you still keep it there)
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
-    if property_obj and property_obj.utility_bill_url:
-        bill_desc = f"Utility Bill: {property_obj.utility_bill_name or 'uploaded bill'}"
-        context_summary.append(bill_desc)
+
+    # Step + media summaries
     for step in steps:
-        notes = step.notes or ""
-        context_summary.append(f"{step.label} ({step.step_type}) - Notes: {notes}")
+        # Include step notes if they exist
+        if step.notes:
+            context_summary.append(f"{step.label} ({step.step_type}) - Notes: {step.notes}")
+
+        # Look at step media for summaries
         for media in step.media:
             if media.summary:
-                context_summary.append(f"{step.label} media summary: {media.summary}")
+                if step.step_type == "interview":
+                    context_summary.append(f"Interview media summary: {media.summary}")
+                elif step.step_type == "utility_bill":
+                    context_summary.append(f"Utility bill summary: {media.summary}")
+                else:
+                    context_summary.append(f"{step.label} media summary: {media.summary}")
 
     full_context = "\n".join(context_summary)
 
