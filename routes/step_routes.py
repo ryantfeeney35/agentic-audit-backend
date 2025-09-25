@@ -18,6 +18,7 @@ def get_audit_steps(audit_id):
             "media_url": m.media_url,
             "file_name": m.file_name,
             "media_type": m.media_type,
+            "summary": m.summary,  # ✅ include summary,
             "created_at": m.created_at.isoformat()
         } for m in media_items]
 
