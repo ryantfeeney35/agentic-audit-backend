@@ -162,3 +162,77 @@ def handle_interview(audit_id):
         'step_id': step.id,
         'media_id': media.id
     })
+
+@bp.route('/audits/<int:audit_id>/utility-bill', methods=['POST'])
+def handle_utility_bill(audit_id):
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'Missing utility bill file'}), 400
+
+    # Save temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        file.save(tmp.name)
+        temp_path = tmp.name
+    print(f"📂 Saved utility bill temp file at {temp_path}")
+
+    # Step 1: Upload file to Supabase
+    try:
+        file_url = upload_to_supabase_and_get_url(
+            file_path=temp_path,
+            audit_id=audit_id,
+            step_label='Utility Bill',
+            media_type='document',
+            step_type='interview'
+        )
+    finally:
+        os.remove(temp_path)
+
+    # Step 2: Summarize utility bill (simple LLM summary)
+    try:
+        summary_resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "You are an energy auditor assistant. Summarize the contents "
+                    "of this utility bill in concise, professional language. "
+                    "Focus on billing period, total charges, usage trends if visible."
+                )},
+                {"role": "user", "content": f"Utility bill file uploaded at {file_url}"}
+            ]
+        )
+        summary = summary_resp.choices[0].message.content
+        print("✅ Utility Bill Summary generated:", summary[:200])
+    except Exception as e:
+        print("❌ Summarization failed:", str(e))
+        summary = "⚠️ Failed to summarize utility bill."
+
+    # Step 3: Save a new AuditStep
+    step = AuditStep(
+        audit_id=audit_id,
+        step_type='interview',
+        label='Utility Bill',
+        notes="Utility bill uploaded",
+        is_completed=True
+    )
+    db.session.add(step)
+    db.session.commit()
+
+    # Step 4: Save media w/ summary
+    media = AuditMedia(
+        audit_id=audit_id,
+        step_id=step.id,
+        step_type='interview',
+        file_name=secure_filename(file.filename),
+        media_type='document',
+        media_url=file_url,
+        summary=summary
+    )
+    db.session.add(media)
+    db.session.commit()
+
+    return jsonify({
+        'summary': summary,
+        'media_url': file_url,
+        'step_id': step.id,
+        'media_id': media.id
+    }), 201

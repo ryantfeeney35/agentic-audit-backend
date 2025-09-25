@@ -14,8 +14,6 @@ class Property(db.Model):
     zip_code = db.Column(db.String)
     year_built = db.Column(db.Integer)
     sqft = db.Column(db.Integer, nullable=True)
-    utility_bill_url = db.Column(db.String, nullable=True)
-    utility_bill_name = db.Column(db.String, nullable=True)
 
     # Relationships
     audits = relationship('Audit', back_populates='property', cascade="all, delete-orphan")
