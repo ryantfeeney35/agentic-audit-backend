@@ -52,8 +52,7 @@ def handle_properties():
 def get_property(property_id):
     with db.engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built, sqft,
-                   utility_bill_url, utility_bill_name
+            SELECT id, street, city, state, zip_code, year_built, sqft
             FROM properties
             WHERE id = :id
         """), {"id": property_id}).fetchone()
@@ -66,9 +65,7 @@ def get_property(property_id):
                 "state": result.state,
                 "zip_code": result.zip_code,
                 "year_built": result.year_built,
-                "sqft": result.sqft,
-                "utility_bill_url": result.utility_bill_url,
-                "utility_bill_name": result.utility_bill_name
+                "sqft": result.sqft
             })
         else:
             return jsonify({"error": "Property not found"}), 404
