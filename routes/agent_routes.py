@@ -130,13 +130,14 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
 
-    # Step + media summaries
+    # Step + media summaries (skip if not_accessible)
     for step in steps:
-        # Include step notes if they exist
+        if step.not_accessible:
+            continue  # 🚫 skip N/A steps
+
         if step.notes:
             context_summary.append(f"{step.label} ({step.step_type}) - Notes: {step.notes}")
 
-        # Look at step media for summaries
         for media in step.media:
             if media.summary:
                 if step.step_type == "interview":

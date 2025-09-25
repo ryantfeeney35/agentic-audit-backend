@@ -25,7 +25,7 @@ DROP TABLE properties;
 delete from properties;
 delete from audits;
 delete from audit_steps;
-delete from audit_media where id = 69
+delete from audit_media where audit_media.media_type = 'document'
 delete from agent_conversations where id > 64
 
 select * from properties;
