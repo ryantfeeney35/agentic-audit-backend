@@ -21,13 +21,32 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- helpers for summarization ---
-def summarize_image(url: str) -> str:
+def summarize_image(path: str) -> str:
+    with open(path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
     resp = client.chat.completions.create(
-        model="gpt-4.1",
+        model="gpt-4o-mini",  # or gpt-4.1 if you prefer
         messages=[
-            {"role": "system", "content": "You are an energy audit assistant. Summarize the key details visible in this photo for audit context."},
-            {"role": "user", "content": f"Photo URL: {url}"}
-        ]
+            {
+                "role": "system",
+                "content": (
+                    "You are an energy audit assistant. "
+                    "Analyze the insulation photo. Describe insulation type, thickness, "
+                    "condition (good/fair/poor), and any visible issues like air leaks, "
+                    "ductwork, or obstructions. Be concise and professional."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    }
+                ],
+            },
+        ],
     )
     return resp.choices[0].message.content.strip()
 
@@ -153,7 +172,7 @@ def process_media_async(app, media_id: int, tmp_path: str, public_url: str, medi
         summary = "❌ Processing failed"
         try:
             if media_type == "photo":
-                summary = summarize_image(public_url)
+                summary = summarize_image(tmp_path)  # ✅ local file, not URL
             elif media_type == "video":
                 summary = summarize_video(tmp_path)
             elif media_type == "audio":
