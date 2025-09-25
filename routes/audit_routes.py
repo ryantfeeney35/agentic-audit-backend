@@ -15,77 +15,43 @@ bp = Blueprint("audits", __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Helper: Extract usage from bill ---
-def extract_usage_from_bill(pdf_path: str):
+def summarize_bill_from_pdf(pdf_path: str) -> str:
     """
-    Extract annual usage (total + TOU breakdown) from a utility bill PDF.
-    Returns a Python dict with structured data.
+    Render the bill chart as an image and send it to GPT for a natural language summary.
     """
     doc = fitz.open(pdf_path)
-    page = doc[0]
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # render high-res
+    page = doc[0]  # ⚠️ adjust if the usage chart is on another page
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     img_bytes = pix.tobytes("png")
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
     prompt = """
-    You are an energy audit assistant.
-    The image is from a utility bill showing ANNUAL USAGE with monthly totals and 
-    a Time-of-Use (TOU) split: On-Peak, Off-Peak, Super Off-Peak.
+    You are an experienced energy auditor. Analyze the attached utility bill chart and
+    write a concise, professional summary that highlights:
 
-    Extract the data into structured JSON with this schema:
+    - The billing period covered
+    - Total annual kWh usage
+    - Seasonal or monthly trends (peak vs. low months)
+    - Any notable patterns (summer peaks, winter lows, unusual fluctuations)
+    - Breakdown of usage by Time-of-Use (on-peak, off-peak, super off-peak) if visible
+    - Practical insights a homeowner or auditor would find useful (e.g. opportunities for savings)
 
-    {
-      "annual_usage": [
-        {
-          "month": "MMM YYYY",
-          "total_kWh": int,
-          "on_peak_kWh": int,
-          "off_peak_kWh": int,
-          "super_off_peak_kWh": int
-        }
-      ],
-      "summary": {
-        "yearly_total_kWh": int,
-        "average_monthly_kWh": int,
-        "peak_month": "MMM YYYY (X kWh)",
-        "lowest_month": "MMM YYYY (X kWh)",
-        "tou_split_percentages": {
-          "on_peak": "X%",
-          "off_peak": "X%",
-          "super_off_peak": "X%"
-        },
-        "insights": "short narrative about usage trends"
-      }
-    }
-
-    Only return valid JSON, no commentary.
+    Keep it short and in plain text (no JSON, no lists, just a narrative).
     """
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You extract structured data from images of utility bills."},
+            {"role": "system", "content": "You summarize utility bills for home energy audits."},
             {"role": "user", "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
             ]}
         ],
-        temperature=0.0,
+        temperature=0.3,
     )
 
-    text = resp.choices[0].message.content.strip()
-
-    # --- Strip code fences if present ---
-    if text.startswith("```"):
-        text = text.strip("`\n ")
-        text = text.replace("json", "", 1).strip()
-        text = text.replace("```", "").strip()
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        data = {"error": "⚠️ Failed to parse structured JSON", "raw_output": text}
-
-    return data
+    return resp.choices[0].message.content.strip()
 
 # --- Routes ---
 
@@ -243,8 +209,9 @@ def handle_utility_bill(audit_id):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
         file.save(tmp.name)
         temp_path = tmp.name
+    print(f"📂 Saved utility bill temp file at {temp_path}")
 
-    # Step 1: Upload file
+    # Step 1: Upload file to Supabase
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
@@ -257,12 +224,11 @@ def handle_utility_bill(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'Upload to Supabase failed', 'details': str(e)}), 500
 
-    # Step 2: Extract + clean JSON
+    # Step 2: Summarize the bill
     try:
-        analysis = extract_usage_from_bill(temp_path)
-        summary = json.dumps(analysis, indent=2)  # always store as clean JSON string
+        summary = summarize_bill_from_pdf(temp_path)
     except Exception as e:
-        summary = json.dumps({"error": f"⚠️ Failed to analyze bill: {e}"})
+        summary = f"⚠️ Failed to summarize bill: {e}"
     finally:
         os.remove(temp_path)
 
@@ -284,13 +250,13 @@ def handle_utility_bill(audit_id):
         file_name=secure_filename(file.filename),
         media_type='document',
         media_url=file_url,
-        summary=summary  # ✅ guaranteed to be JSON string
+        summary=summary  # ✅ plain text summary
     )
     db.session.add(media)
     db.session.commit()
 
     return jsonify({
-        'summary': analysis,
+        'summary': summary,
         'media_url': file_url,
         'step_id': step.id,
         'media_id': media.id
