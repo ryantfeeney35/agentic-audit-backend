@@ -18,11 +18,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 def extract_usage_from_bill(pdf_path: str):
     """
     Extract annual usage (total + TOU breakdown) from a utility bill PDF.
-
-    Returns structured JSON.
+    Returns a Python dict with structured data.
     """
     doc = fitz.open(pdf_path)
-    # ⚠️ Adjust page index if chart lives on another page
     page = doc[0]
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # render high-res
     img_bytes = pix.tobytes("png")
@@ -74,11 +72,18 @@ def extract_usage_from_bill(pdf_path: str):
         temperature=0.0,
     )
 
-    text = resp.choices[0].message.content
+    text = resp.choices[0].message.content.strip()
+
+    # --- Strip code fences if present ---
+    if text.startswith("```"):
+        text = text.strip("`\n ")
+        text = text.replace("json", "", 1).strip()
+        text = text.replace("```", "").strip()
+
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        data = {"summary": "⚠️ Failed to parse structured JSON", "raw_output": text}
+        data = {"error": "⚠️ Failed to parse structured JSON", "raw_output": text}
 
     return data
 
@@ -154,9 +159,8 @@ def handle_interview(audit_id):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
         file.save(tmp.name)
         temp_path = tmp.name
-    print(f"📂 Saved audio temp file at {temp_path}")
 
-    # Step 1: Transcribe audio with Whisper
+    # Step 1: Transcribe
     try:
         with open(temp_path, "rb") as f:
             transcript_resp = client.audio.transcriptions.create(
@@ -168,7 +172,7 @@ def handle_interview(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
-    # Step 2: Summarize transcript
+    # Step 2: Summarize
     try:
         summary_resp = client.chat.completions.create(
             model="gpt-4o",
@@ -185,7 +189,7 @@ def handle_interview(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
 
-    # Step 3: Upload audio file
+    # Step 3: Upload audio
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
@@ -239,9 +243,8 @@ def handle_utility_bill(audit_id):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
         file.save(tmp.name)
         temp_path = tmp.name
-    print(f"📂 Saved utility bill temp file at {temp_path}")
 
-    # Step 1: Upload file to Supabase
+    # Step 1: Upload file
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
@@ -254,12 +257,12 @@ def handle_utility_bill(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'Upload to Supabase failed', 'details': str(e)}), 500
 
-    # Step 2: Extract structured usage from PDF
+    # Step 2: Extract + clean JSON
     try:
         analysis = extract_usage_from_bill(temp_path)
-        summary = json.dumps(analysis, indent=2)
+        summary = json.dumps(analysis, indent=2)  # always store as clean JSON string
     except Exception as e:
-        summary = f"⚠️ Failed to analyze bill: {e}"
+        summary = json.dumps({"error": f"⚠️ Failed to analyze bill: {e}"})
     finally:
         os.remove(temp_path)
 
@@ -281,13 +284,13 @@ def handle_utility_bill(audit_id):
         file_name=secure_filename(file.filename),
         media_type='document',
         media_url=file_url,
-        summary=summary
+        summary=summary  # ✅ guaranteed to be JSON string
     )
     db.session.add(media)
     db.session.commit()
 
     return jsonify({
-        'summary': summary,
+        'summary': analysis,
         'media_url': file_url,
         'step_id': step.id,
         'media_id': media.id
