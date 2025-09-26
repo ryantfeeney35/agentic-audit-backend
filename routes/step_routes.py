@@ -18,7 +18,7 @@ def get_audit_steps(audit_id):
             "media_url": m.media_url,
             "file_name": m.file_name,
             "media_type": m.media_type,
-            "summary": m.summary,  # ✅ include summary,
+            "summary": m.summary,
             "created_at": m.created_at.isoformat()
         } for m in media_items]
 
@@ -34,8 +34,7 @@ def get_audit_steps(audit_id):
             "id": step.id,
             "label": step.label,
             "step_type": step.step_type,
-            "is_completed": step.is_completed,
-            "not_accessible": step.not_accessible,
+            "status": step.status,   # ✅ new unified status field
             "notes": notes_parsed,
             "media": media
         })
@@ -49,8 +48,7 @@ def create_or_update_audit_step(audit_id):
     data = request.get_json()
     step_type = data.get('step_type')
     label = data.get('label')
-    is_completed = data.get('is_completed')
-    not_accessible = data.get('not_accessible')
+    status = data.get('status')  # Expect one of: Not Started, Processing, Completed, Error, Not Accessible
     notes = data.get('notes')
 
     if not step_type or not label:
@@ -67,10 +65,8 @@ def create_or_update_audit_step(audit_id):
     ).first()
 
     if existing_step:
-        if is_completed is not None:
-            existing_step.is_completed = is_completed
-        if not_accessible is not None:
-            existing_step.not_accessible = not_accessible
+        if status:
+            existing_step.status = status
         if notes is not None:
             existing_step.notes = notes_str
 
@@ -81,8 +77,7 @@ def create_or_update_audit_step(audit_id):
             audit_id=audit_id,
             step_type=step_type,
             label=label,
-            is_completed=is_completed if is_completed is not None else False,
-            not_accessible=not_accessible if not_accessible is not None else False,
+            status=status if status else "Not Started",
             notes=notes_str
         )
         db.session.add(new_step)
@@ -104,8 +99,8 @@ def get_media_by_step_label(audit_id, step_label):
             "media_url": m.media_url,
             "file_name": m.file_name,
             "media_type": m.media_type,
-            "summary": m.summary,  # ✅ include summary
+            "summary": m.summary,
             "created_at": m.created_at.isoformat(),
-            "not_accessible": step.not_accessible
+            "status": step.status  # ✅ return step status along with media
         } for m in media_items
     ])

@@ -279,6 +279,7 @@ def summarize_audio(path: str) -> str:
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str, orientation: str = None):
     with app.app_context():
         summary = "❌ Processing failed"
+        new_status = "Error"
         try:
             media = AuditMedia.query.get(media_id)
             step_type = media.step_type if media else "exterior"
@@ -286,16 +287,21 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
 
             if media_type == "photo":
                 summary = summarize_image(local_path, step_type=step_type, orientation=orientation)
+                new_status = "Completed"
             elif media_type == "video":
                 summary = summarize_video(local_path, step_type=step_type, orientation=orientation)
+                new_status = "Completed"
             elif media_type == "audio":
                 transcript = summarize_audio(local_path)
                 summary = f"Audio transcript: {transcript}"
+                new_status = "Completed"
             else:
                 summary = "ℹ️ Unsupported media type"
+                new_status = "Error"
         except Exception as e:
             print(f"❌ [process_media_async] Error: {e}")
             summary = f"❌ Failed to process: {e}"
+            new_status = "Error"
 
         # Save back
         media = AuditMedia.query.get(media_id)
@@ -303,8 +309,15 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
             media.summary = summary
             db.session.commit()
             print(f"✅ [process_media_async] Saved summary for media_id={media_id}")
-        else:
-            print(f"⚠️ [process_media_async] Media {media_id} not found at save time")
+
+            # Also update step status
+            step = AuditStep.query.get(media.step_id)
+            if step:
+                step.status = new_status
+                db.session.commit()
+                print(f"📌 Step {step.id} status -> {new_status}")
+            else:
+                print(f"⚠️ [process_media_async] Step {media.step_id} not found at save time")
 
 # -------------------------
 # Routes
@@ -330,15 +343,21 @@ def upload_media_by_step_label(audit_id, step_label):
     # Find/create step
     step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
     if not step:
-        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
+        step = AuditStep(
+            audit_id=audit_id,
+            label=step_label,
+            step_type=step_type,
+            status="Processing"
+        )
         db.session.add(step)
         db.session.commit()
         print(f"🆕 Created step id={step.id} ({step_type}, '{step_label}')")
     else:
         if step.step_type != step_type:
             step.step_type = step_type
-            db.session.commit()
-            print(f"✏️  Updated step {step.id} step_type -> {step_type}")
+        step.status = "Processing"   # Always set Processing when new upload starts
+        db.session.commit()
+        print(f"✏️ Updated step {step.id} step_type={step.step_type}, status=Processing")
     print(f"📌 Found step id={step.id}")
 
     try:
@@ -396,11 +415,16 @@ def upload_media_by_step_label(audit_id, step_label):
             "id": media_row.id,
             "media_url": public_url,
             "summary": media_row.summary,
-            "status": "processing"
+            "status": step.status
         }), 201
 
     except Exception as e:
         print(f"❌ [upload_media_by_step_label] Upload failed: {e}")
+        step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
+        if step:
+            step.status = "Error"
+            db.session.commit()
+            print(f"⚠️ Step {step.id} marked as Error due to upload failure")
         return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
 
 
@@ -425,6 +449,10 @@ def upload_step_media(step_id):
     print(f"⬆️ [upload_step_media] step_type={step.step_type}, media_type={media_type}")
 
     try:
+        # ⏳ mark step as Processing
+        step.status = "Processing"
+        db.session.commit()
+
         # For parity with label route, optionally compress if needed
         tmp_path = os.path.join(tempfile.gettempdir(), filename)
         with open(tmp_path, "wb") as f:
@@ -465,12 +493,20 @@ def upload_step_media(step_id):
         ).start()
         print(f"🚀 Spawned background thread for media {media_row.id}")
 
-        return jsonify({"id": media_row.id, "media_url": public_url, "summary": media_row.summary, "status": "processing"}), 201
+        return jsonify({
+            "id": media_row.id,
+            "media_url": public_url,
+            "summary": media_row.summary,
+            "status": "processing"
+        }), 201
 
     except Exception as e:
         print(f"❌ [upload_step_media] Upload failed: {e}")
+        step = AuditStep.query.get(step_id)
+        if step:
+            step.status = "Error"
+            db.session.commit()
         return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
-
 
 # --- Get all media for an audit ---
 @bp.route('/audits/<int:audit_id>/media', methods=['GET'])
