@@ -1,15 +1,14 @@
 import shutil
+import os
+import base64
+import tempfile
+import subprocess
+from threading import Thread
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
-from models import AuditMedia, AuditStep, db
-import os
 from supabase import create_client
 from openai import OpenAI
-import tempfile
-from threading import Thread
-import base64
-import subprocess
-import json
+from models import AuditMedia, AuditStep, db
 
 bp = Blueprint("media", __name__)
 
@@ -21,49 +20,42 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# --- helpers ---
+def compress_video(input_path, output_path):
+    print(f"🎞️ [compress_video] Compressing {input_path} -> {output_path}")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", input_path,
+            "-vcodec", "libx264", "-crf", "28", "-preset", "veryfast",
+            "-acodec", "aac", "-b:a", "128k",
+            output_path
+        ], check=True)
+        print(f"✅ [compress_video] Compression complete: {output_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ [compress_video] Compression failed: {e}")
+        raise
 
-# --- helpers for summarization ---
 def summarize_image(path: str) -> str:
-    print(f"🖼️ [summarize_image] Starting summarization for {path}")
+    print(f"📸 [summarize_image] Summarizing {path}")
     with open(path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an energy audit assistant. "
-                    "Analyze the insulation photo. Describe insulation type, thickness, "
-                    "condition (good/fair/poor), and any visible issues like air leaks, "
-                    "ductwork, or obstructions. Be concise and professional."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-                    }
-                ],
-            },
+            {"role": "system", "content": "You are an energy audit assistant. Analyze the insulation photo."},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+            ]}
         ],
     )
-    summary = resp.choices[0].message.content.strip()
-    print(f"🖼️ [summarize_image] Done: {summary[:80]}...")
-    return summary
+    return resp.choices[0].message.content.strip()
 
-
-def extract_frames(video_path, out_dir, interval=5, max_frames=10):
-    """
-    Extract frames from video every N seconds (default: 5s).
-    """
-    print(f"🎞️ [extract_frames] Extracting frames every {interval}s from {video_path}")
+def extract_frames(video_path, out_dir, fps=0.2, max_frames=5):
+    print(f"🎞️ [extract_frames] Extracting frames every {1/fps:.1f}s from {video_path}")
     subprocess.run([
         "ffmpeg", "-i", video_path,
-        "-vf", f"fps=1/{interval}",
+        "-vf", f"fps={fps}",
         os.path.join(out_dir, "frame_%03d.jpg")
     ], check=True)
 
@@ -73,16 +65,13 @@ def extract_frames(video_path, out_dir, interval=5, max_frames=10):
     print(f"🎞️ [extract_frames] Extracted {len(frame_files)} frames")
     return [os.path.join(out_dir, f) for f in frame_files]
 
-
 def image_to_base64(path):
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-
 def summarize_video(path: str) -> str:
     print(f"📹 [summarize_video] Starting summarization for {path}")
-
-    # --- Step 1: Transcribe audio ---
+    # Step 1: transcribe
     with open(path, "rb") as f:
         transcript = client.audio.transcriptions.create(
             model="gpt-4o-transcribe",
@@ -90,12 +79,11 @@ def summarize_video(path: str) -> str:
         ).text
     print(f"📹 [summarize_video] Transcript length: {len(transcript)} chars")
 
-    # --- Step 2: Extract frames ---
+    # Step 2: extract frames
     out_dir = tempfile.mkdtemp()
     frame_paths = extract_frames(path, out_dir)
 
     try:
-        # --- Step 3: Summarize frames ---
         frame_summaries = []
         for fp in frame_paths:
             print(f"📸 [summarize_video] Processing frame {fp}")
@@ -103,88 +91,46 @@ def summarize_video(path: str) -> str:
             resp = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an energy audit assistant. "
-                            "Analyze this video frame for siding, shading, insulation cues, or other building envelope details. "
-                            "Keep it concise and factual."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                        ]
-                    }
+                    {"role": "system", "content": "Analyze this video frame for building envelope details."},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
+                    ]}
                 ]
             )
-            frame_summary = resp.choices[0].message.content.strip()
-            frame_summaries.append(frame_summary)
-            print(f"📸 [summarize_video] Frame summary: {frame_summary[:80]}...")
+            summary = resp.choices[0].message.content.strip()
+            print(f"📸 [summarize_video] Frame summary: {summary[:60]}...")
+            frame_summaries.append(summary)
 
-        # --- Step 4: Merge transcript + frames ---
+        # Step 3: merge
         merged_resp = client.chat.completions.create(
             model="gpt-4.1",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an energy auditor assistant. "
-                        "Combine the homeowner's voiceover (transcript) with frame analyses into one cohesive, concise summary. "
-                        "Highlight key details for insulation, siding, shading, or other envelope/energy efficiency factors. "
-                        "Do not repeat verbatim text; synthesize into useful audit notes."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Transcript:\n{transcript}\n\n"
-                        f"Frame observations:\n" + "\n".join(frame_summaries)
-                    )
-                }
+                {"role": "system", "content": "Combine transcript + frame analyses into concise audit notes."},
+                {"role": "user", "content": f"Transcript:\n{transcript}\n\nFrames:\n" + "\n".join(frame_summaries)}
             ]
         )
-        summary = merged_resp.choices[0].message.content.strip()
-        print(f"📹 [summarize_video] Final summary: {summary[:120]}...")
-        return summary
-
+        final_summary = merged_resp.choices[0].message.content.strip()
+        print(f"📹 [summarize_video] Final summary: {final_summary[:80]}...")
+        return final_summary
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
 
-
 def summarize_audio(path: str) -> str:
-    print(f"🎤 [summarize_audio] Starting transcription for {path}")
+    print(f"🎙️ [summarize_audio] Summarizing {path}")
     with open(path, "rb") as f:
         transcript = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=f
+            model="gpt-4o-transcribe", file=f
         ).text
-    print(f"🎤 [summarize_audio] Transcript length: {len(transcript)} chars")
-
     summary_resp = client.chat.completions.create(
         model="gpt-4.1",
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an energy auditor assistant. "
-                    "Summarize the homeowner's statements clearly and concisely. "
-                    "Highlight comfort issues, planned upgrades, and any contextual insights. "
-                    "Do not just repeat verbatim text; condense into professional notes."
-                )
-            },
+            {"role": "system", "content": "Summarize the homeowner's statements clearly and concisely."},
             {"role": "user", "content": transcript}
         ]
     )
-    summary = summary_resp.choices[0].message.content.strip()
-    print(f"🎤 [summarize_audio] Final summary: {summary[:120]}...")
-    return summary
+    return summary_resp.choices[0].message.content.strip()
 
-
-# ✅ background processor
 def process_media_async(app, media_id: int, tmp_path: str, public_url: str, media_type: str):
-    print(f"🚀 [process_media_async] Start for media_id={media_id}, type={media_type}")
     with app.app_context():
         summary = "❌ Processing failed"
         try:
@@ -196,7 +142,7 @@ def process_media_async(app, media_id: int, tmp_path: str, public_url: str, medi
                 summary = summarize_audio(tmp_path)
         except Exception as e:
             summary = f"❌ Failed to process: {e}"
-            print(f"🔥 [process_media_async] Error: {e}")
+            print(summary)
 
         media = AuditMedia.query.get(media_id)
         if media:
@@ -204,12 +150,11 @@ def process_media_async(app, media_id: int, tmp_path: str, public_url: str, medi
             db.session.commit()
             print(f"✅ [process_media_async] Saved summary for media_id={media_id}")
 
-
 @bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 def upload_media_by_step_label(audit_id, step_label):
     print(f"⬆️ [upload_media_by_step_label] Called for audit {audit_id}, step '{step_label}'")
+
     if 'file' not in request.files:
-        print("❌ No file in request")
         return jsonify({'error': 'No file uploaded'}), 400
 
     file = request.files['file']
@@ -221,27 +166,34 @@ def upload_media_by_step_label(audit_id, step_label):
     media_type = request.form.get('media_type', 'photo')
     print(f"⬆️ [upload_media_by_step_label] step_type={step_type}, media_type={media_type}")
 
-    # find or create step
     step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
-    if step:
-        print(f"📌 Found existing step id={step.id}")
-        if step.step_type != step_type:
-            step.step_type = step_type
-            db.session.commit()
-            print(f"📌 Updated step_type to {step_type}")
-    else:
+    if not step:
         step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type)
         db.session.add(step)
         db.session.commit()
-        print(f"📌 Created new step id={step.id}")
+    print(f"📌 Found step id={step.id}")
 
     try:
-        # upload to Supabase
-        supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(filename, file_content)
+        # save tmp file
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
+        with open(tmp_path, "wb") as f:
+            f.write(file_content)
+        print(f"📂 Saved temp file {tmp_path}")
+
+        # compress if video
+        upload_path = tmp_path
+        if media_type == "video":
+            compressed_path = os.path.join(tempfile.gettempdir(), f"compressed_{filename}")
+            compress_video(tmp_path, compressed_path)
+            upload_path = compressed_path
+
+        # upload to supabase
+        with open(upload_path, "rb") as f:
+            supabase.storage.from_(SUPABASE_BUCKET_NAME).upload(filename, f.read())
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
         print(f"⬆️ Uploaded file to {public_url}")
 
-        # save DB entry with placeholder
+        # DB entry
         media = AuditMedia(
             audit_id=audit_id,
             step_id=step.id,
@@ -256,28 +208,17 @@ def upload_media_by_step_label(audit_id, step_label):
         db.session.commit()
         print(f"📌 Media record created id={media.id}")
 
-        # temp copy for async worker
-        tmp_path = os.path.join(tempfile.gettempdir(), filename)
-        with open(tmp_path, "wb") as f:
-            f.write(file_content)
-        print(f"📂 Saved temp file {tmp_path}")
-
+        # async summarization
         Thread(
             target=process_media_async,
             args=(current_app._get_current_object(), media.id, tmp_path, public_url, media_type)
         ).start()
         print(f"🚀 Spawned background thread for media {media.id}")
 
-        return jsonify({
-            "id": media.id,
-            "media_url": public_url,
-            "summary": media.summary,
-            "status": "processing"
-        }), 201
-
+        return jsonify({"id": media.id, "media_url": public_url, "summary": media.summary, "status": "processing"}), 201
     except Exception as e:
         print(f"❌ Upload failed: {e}")
-        return jsonify({'error': 'Upload failed'}), 500
+        return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
 
 
 # --- Get all media for an audit ---
