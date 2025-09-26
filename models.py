@@ -39,8 +39,7 @@ class AuditStep(db.Model):
     audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete='CASCADE'), nullable=False)
     step_type = db.Column(db.String, nullable=False)  # e.g., 'exterior', 'attic'
     label = db.Column(db.String, nullable=True)       # e.g., 'North Side', 'Attic Access Hatch'
-    is_completed = db.Column(db.Boolean, default=False)
-    not_accessible = db.Column(db.Boolean, default=False)
+    status = db.Column(db.String(20), default="Not Started")  # New unified status
     notes = db.Column(db.Text, nullable=True)
 
     # Relationships
