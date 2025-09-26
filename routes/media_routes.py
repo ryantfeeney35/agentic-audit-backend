@@ -26,6 +26,7 @@ def compress_video(input_path, output_path):
     try:
         subprocess.run([
             "ffmpeg", "-y", "-i", input_path,
+            "-vf", "scale=1920:-2,fps=30",   # downscale to 1080p and limit to 30fps
             "-vcodec", "libx264", "-crf", "28", "-preset", "veryfast",
             "-acodec", "aac", "-b:a", "128k",
             output_path
