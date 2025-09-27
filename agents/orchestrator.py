@@ -1,69 +1,76 @@
-import logging
-from .insulation import insulation_agent
-from .siding import siding_agent
-from .hvac import hvac_agent
-from .utils import call_llm
-
-logger = logging.getLogger("orchestration")
-logger.setLevel(logging.DEBUG)
+# agents/orchestrator.py
+from .base_agent import run_agent
+from .context_builder import build_full_context
+from models import AgentConversation, Audit, db
 
 class OrchestratorAgent:
-    """Handles coordination across insulation, siding, HVAC agents."""
+    """Coordinates domain-specific agents (insulation, siding, hvac, etc)."""
 
-    def __init__(self, audit_id=None):
+    def __init__(self, audit_id: int):
         self.audit_id = audit_id
 
-    def run(self, context: str, bootstrap: bool = False) -> str:
-        system_prompt = (
-            "You are the Orchestrator Agent for a home energy audit.\n"
-            "Bootstrap mode:\n"
-            "1. Review all context (interview, notes, utility bill, photos).\n"
-            "2. Call insulation, siding, and HVAC agents.\n"
-            "3. Return ONE unified summary of findings.\n"
-            "4. Return ONE unified, deduplicated list of follow-up questions.\n"
-            "Do not generate upgrade recommendations yet."
-            if bootstrap
-            else
-            "You are the Orchestrator Agent for a home energy audit.\n"
-            "User has provided new answers.\n"
-            "Your task:\n"
-            "1. Incorporate ONLY new user answers.\n"
-            "2. Call insulation, siding, and HVAC agents with updated context.\n"
-            "3. Return ONLY an updated, unified, deduplicated list of remaining follow-up questions."
+    def _save_message(self, role: str, domain: str, content: str):
+        msg = AgentConversation(
+            audit_id=self.audit_id,
+            role=role,
+            domain=domain,
+            content=content,
         )
+        db.session.add(msg)
+        db.session.commit()
+        return msg
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": context},
-        ]
+    def bootstrap(self) -> str:
+        """Initial run: summarize findings + ask follow-up questions."""
+        context = build_full_context(self.audit_id)
 
-        orchestration_reply = call_llm(messages)
-        logger.debug(f"🤖 Orchestration raw reply: {orchestration_reply}")
+        # Run specialized agents
+        insulation_out = run_agent("insulation", context, bootstrap=True)
+        siding_out = run_agent("siding", context, bootstrap=True)
+        hvac_out = run_agent("hvac", context, bootstrap=True)
 
-        # Dispatch to domain agents
-        agent_replies = []
-        if "insulation" in orchestration_reply.lower():
-            agent_replies.append(insulation_agent(context, bootstrap))
-        if "siding" in orchestration_reply.lower():
-            agent_replies.append(siding_agent(context, bootstrap))
-        if "hvac" in orchestration_reply.lower():
-            agent_replies.append(hvac_agent(context, bootstrap))
+        # Merge results
+        summary_parts = []
+        followup_questions = []
 
-        if not agent_replies:
-            return "✅ No further follow-up questions. Proceed to recommendations."
+        for agent_out in [insulation_out, siding_out, hvac_out]:
+            if agent_out.summary:
+                summary_parts.append(agent_out.summary)
+            if agent_out.followup_questions:
+                followup_questions.extend(agent_out.followup_questions)
 
-        merge_prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "You are the Orchestrator Agent merging outputs from domain agents.\n"
-                    "Rules:\n"
-                    "- On bootstrap: output ONE unified summary AND ONE list of follow-up questions.\n"
-                    "- On later turns: output ONLY the unified list of questions.\n"
-                    "- If all agents say 'No further ... questions', return:\n"
-                    "  '✅ No further follow-up questions. Proceed to recommendations.'"
-                ),
-            },
-            {"role": "user", "content": "\n\n".join(agent_replies)},
-        ]
-        return call_llm(merge_prompt)
+        final_reply = "Summary:\n" + "\n".join(summary_parts)
+        if followup_questions:
+            final_reply += "\n\nFollow-up Questions:\n- " + "\n- ".join(
+                list(dict.fromkeys(followup_questions))  # dedupe
+            )
+        else:
+            final_reply += "\n\n✅ No further follow-up questions. Proceed to recommendations."
+
+        self._save_message("assistant", "orchestrator", final_reply)
+        return final_reply
+
+    def handle_user_answer(self, user_answer: str) -> str:
+        """Handle a new user answer and return updated follow-up questions."""
+        self._save_message("user", "orchestrator", user_answer)
+
+        context = build_full_context(self.audit_id)
+
+        insulation_out = run_agent("insulation", context, bootstrap=False)
+        siding_out = run_agent("siding", context, bootstrap=False)
+        hvac_out = run_agent("hvac", context, bootstrap=False)
+
+        followup_questions = []
+        for agent_out in [insulation_out, siding_out, hvac_out]:
+            if agent_out.followup_questions:
+                followup_questions.extend(agent_out.followup_questions)
+
+        if followup_questions:
+            final_reply = "Follow-up Questions:\n- " + "\n- ".join(
+                list(dict.fromkeys(followup_questions))
+            )
+        else:
+            final_reply = "✅ No further follow-up questions. Proceed to recommendations."
+
+        self._save_message("assistant", "orchestrator", final_reply)
+        return final_reply
