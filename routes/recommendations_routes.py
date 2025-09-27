@@ -25,10 +25,20 @@ def generate_recommendations(audit_id: int):
         })
 
     system_prompt = (
-        "You are an energy auditor following CREIA protocol. "
-        "Generate upgrade recommendations with numeric ROI. "
-        "Each item must include:\n"
-        "- step_type\n- summary\n- annual_savings_usd\n- upgrade_cost_usd\n- payback_years"
+        "You are an energy auditor following CREIA protocol.\n"
+        "Generate upgrade recommendations with numeric ROI.\n"
+        "Return ONLY valid JSON of the form:\n\n"
+        "{\n"
+        "  \"recommendations\": [\n"
+        "    {\n"
+        "      \"step_type\": \"insulation | hvac | exterior | general\",\n"
+        "      \"summary\": \"string\",\n"
+        "      \"annual_savings_usd\": number,\n"
+        "      \"upgrade_cost_usd\": number,\n"
+        "      \"payback_years\": number\n"
+        "    }, ...\n"
+        "  ]\n"
+        "}"
     )
 
     resp = client.chat.completions.create(
@@ -38,22 +48,29 @@ def generate_recommendations(audit_id: int):
             {"role": "user", "content": json.dumps(step_contexts)},
         ],
         temperature=0.3,
+        response_format={"type": "json_object"},  # ✅ enforce JSON
     )
-    text = resp.choices[0].message.content.strip()
 
+    text = resp.choices[0].message.content.strip()
     try:
-        recommendations = json.loads(text)
-    except Exception:
+        parsed = json.loads(text)
+        recommendations = parsed.get("recommendations", [])
+    except Exception as e:
+        print(f"⚠️ Failed to parse recommendations JSON: {e}")
+        recommendations = []
+
+    # Fallback: always have at least one rec
+    if not recommendations:
         recommendations = [{
             "step_type": "general",
-            "summary": text,
+            "summary": "No recommendations could be generated.",
             "annual_savings_usd": 0,
             "upgrade_cost_usd": 0,
             "payback_years": None
         }]
 
     # Save to DB
-    AuditRecommendation.query.filter_by(audit_id=audit_id).delete()  # ✅ clear old recs
+    AuditRecommendation.query.filter_by(audit_id=audit_id).delete()
     saved = []
     for rec in recommendations:
         r = AuditRecommendation(
