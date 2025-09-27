@@ -1,6 +1,6 @@
 # agents/orchestrator.py
 from .base_agent import run_agent
-from .context_builder import build_full_context
+from .context_builder import build_audit_context  # ✅ fixed import
 from models import AgentConversation, Audit, db
 
 class OrchestratorAgent:
@@ -22,7 +22,7 @@ class OrchestratorAgent:
 
     def bootstrap(self) -> str:
         """Initial run: summarize findings + ask follow-up questions."""
-        context = build_full_context(self.audit_id)
+        context = build_audit_context(self.audit_id)  # ✅ updated call
 
         # Run specialized agents
         insulation_out = run_agent("insulation", context, bootstrap=True)
@@ -54,7 +54,7 @@ class OrchestratorAgent:
         """Handle a new user answer and return updated follow-up questions."""
         self._save_message("user", "orchestrator", user_answer)
 
-        context = build_full_context(self.audit_id)
+        context = build_audit_context(self.audit_id)  # ✅ updated call
 
         insulation_out = run_agent("insulation", context, bootstrap=False)
         siding_out = run_agent("siding", context, bootstrap=False)
