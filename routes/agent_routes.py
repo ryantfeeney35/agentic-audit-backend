@@ -43,7 +43,6 @@ def call_llm(messages):
     return response.choices[0].message.content
 
 # --- Specialized agents ---
-# --- Specialized agents ---
 def insulation_agent(context, bootstrap=False):
     if bootstrap:
         system_content = (
@@ -88,35 +87,13 @@ def siding_agent(context, bootstrap=False):
         {"role": "user", "content": context},
     ])
 
-def siding_agent(context, bootstrap=False):
-    if bootstrap:
-        system_content = (
-            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
-            "- Review provided context.\n"
-            "- Provide a short summary of siding/exterior findings.\n"
-            "- List clear follow-up questions if info is incomplete.\n"
-            "- Do not make upgrade recommendations yet."
-        )
-    else:
-        system_content = (
-            "You are the Siding Agent. Focus ONLY on siding and exterior walls.\n"
-            "- DO NOT summarize.\n"
-            "- DO NOT repeat previously answered questions.\n"
-            "- ONLY output NEW follow-up questions that remain unanswered.\n"
-            "- If you have no further questions, respond exactly with: 'No further siding questions.'"
-        )
-    return call_llm([
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": context},
-    ])
-
 # --- Orchestration Agent ---
 def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, user_answer=None):
     audit = Audit.query.get(audit_id)
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     property_obj = audit.property if audit else None
 
-        # --- Build context ---
+    # --- Build context ---
     context_summary = []
 
     # Property details
@@ -130,9 +107,9 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     if audit and audit.notes:
         context_summary.append(f"Interview summary: {audit.notes}")
 
-    # Step + media summaries (skip if not_accessible)
+    # Step + media summaries (skip if status == Not Accessible)
     for step in steps:
-        if step.not_accessible:
+        if step.status == "Not Accessible":
             continue  # 🚫 skip N/A steps
 
         if step.notes:
