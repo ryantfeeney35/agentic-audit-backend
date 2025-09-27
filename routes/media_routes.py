@@ -141,6 +141,18 @@ def summarize_image(path: str, step_type: str = "exterior", orientation: str = N
             "- Recommend upgrades where helpful.\n"
             "Keep the summary concise and professional."
         )
+    elif step_type == "hvac":
+        system_prompt = (
+            "You are an energy audit assistant (CREIA Protocol).\n"
+            "Analyze HVAC system photos (heating, cooling, ducting):\n"
+            "- Identify system type (furnace, heat pump, mini-split, etc.)\n"
+            "- Note brand, model, efficiency ratings (AFUE, SEER, HSPF) if visible\n"
+            "- Assess age/condition (wear, rust, leaks)\n"
+            "- Ducting: type, sealing, insulation, asbestos tape, air filter condition\n"
+            "- Flag safety issues (cracked heat exchanger, CO risk, dirty/absent filters)\n"
+            "- Mention efficiency implications.\n"
+            "Provide a concise professional summary."
+        )
     else:
         # Exterior / Siding context with orientation
         system_prompt = (
@@ -198,6 +210,16 @@ def summarize_video(path: str, step_type: str = "exterior", orientation: str = N
                     "- Condition (Good/Fair/Poor)\n"
                     "- Issues: gaps, thermal breaks, attic cover, recessed lights\n"
                     "Short and factual."
+                )
+            elif step_type == "hvac":
+                sys_prompt = (
+                    "You are an energy audit assistant (CREIA Protocol).\n"
+                    "Analyze this HVAC video frame:\n"
+                    "- Identify equipment type, brand/model, efficiency labels\n"
+                    "- Assess condition (wear, leaks, age)\n"
+                    "- Ducts: type, sealing, insulation, asbestos tape\n"
+                    "- Air filter placement/condition\n"
+                    "Provide concise professional notes."
                 )
             else:
                 system_prompt = (
