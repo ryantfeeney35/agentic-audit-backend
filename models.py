@@ -1,4 +1,3 @@
-# models.py
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -32,6 +31,8 @@ class Audit(db.Model):
     property = relationship('Property', back_populates='audits')
     steps = relationship('AuditStep', back_populates='audit', cascade="all, delete-orphan")
     media = relationship('AuditMedia', back_populates='audit', cascade="all, delete-orphan")
+    recommendations = relationship('AuditRecommendation', back_populates='audit', cascade="all, delete-orphan")
+
 
 class AuditStep(db.Model):
     __tablename__ = 'audit_steps'
@@ -45,25 +46,25 @@ class AuditStep(db.Model):
     # Relationships
     audit = relationship('Audit', back_populates='steps')
     media = relationship('AuditMedia', back_populates='step', cascade="all, delete-orphan")
-    findings = relationship('AuditFinding', back_populates='step', cascade="all, delete-orphan")
 
 
 class AuditMedia(db.Model):
     __tablename__ = 'audit_media'
     id = db.Column(db.Integer, primary_key=True)
     audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
-    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id'), nullable=True)
+    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete="CASCADE"), nullable=True)
     step_type = db.Column(db.String, nullable=False)
     side = db.Column(db.String, nullable=True)
     media_url = db.Column(db.String, nullable=True)
     file_name = db.Column(db.String, nullable=True)
     media_type = db.Column(db.String, nullable=True)  # e.g., 'photo', 'video'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    summary = db.Column(db.Text)  
+    summary = db.Column(db.Text)
 
     # Relationships
     audit = relationship('Audit', back_populates='media')
     step = relationship('AuditStep', back_populates='media')
+
 
 class AgentConversation(db.Model):
     __tablename__ = "agent_conversations"
@@ -75,11 +76,12 @@ class AgentConversation(db.Model):
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 class AuditRecommendation(db.Model):
     __tablename__ = "audit_recommendations"
 
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String(50), nullable=False)
     summary = db.Column(db.Text, nullable=False)
     annual_savings_usd = db.Column(db.Float)
@@ -87,4 +89,4 @@ class AuditRecommendation(db.Model):
     payback_years = db.Column(db.Float)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
-    audit = db.relationship("Audit", backref=db.backref("recommendations", lazy=True))
+    audit = relationship("Audit", back_populates="recommendations")
