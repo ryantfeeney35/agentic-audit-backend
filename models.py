@@ -90,3 +90,12 @@ class AuditRecommendation(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     audit = relationship("Audit", back_populates="recommendations")
+
+class Contractor(db.Model):
+    __tablename__ = "contractors"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    contact = db.Column(db.String(120), nullable=False)  # phone, email, etc.
+    step_type = db.Column(db.String(50), nullable=False)  # e.g., insulation, hvac, exterior
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

@@ -4,6 +4,7 @@ from .audit_routes import bp as audit_bp
 from .step_routes import bp as step_bp
 from .media_routes import bp as media_bp
 from .recommendations_routes import bp as recommendations_bp
+from .contractor_routes import bp as contractor_bp
 
 def register_blueprints(app):
     app.register_blueprint(agent_bp, url_prefix="/api")
@@ -12,3 +13,4 @@ def register_blueprints(app):
     app.register_blueprint(step_bp, url_prefix="/api")
     app.register_blueprint(media_bp, url_prefix="/api")
     app.register_blueprint(recommendations_bp, url_prefix="/api")
+    app.register_blueprint(contractor_bp, url_prefix="/api")
