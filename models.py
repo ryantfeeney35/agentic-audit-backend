@@ -75,15 +75,16 @@ class AgentConversation(db.Model):
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-class AuditFinding(db.Model):
-    __tablename__ = 'audit_findings'
-    id = db.Column(db.Integer, primary_key=True)
-    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete='CASCADE'), nullable=False)
-    title = db.Column(db.String, nullable=True)
-    description = db.Column(db.Text, nullable=True)
-    recommendation = db.Column(db.Text, nullable=True)
-    severity = db.Column(db.String, nullable=True)  # e.g., 'low', 'medium', 'high'
-    source = db.Column(db.String, nullable=True)    # e.g., 'AI', 'Inspector'
+class AuditRecommendation(db.Model):
+    __tablename__ = "audit_recommendations"
 
-    # Relationships
-    step = relationship('AuditStep', back_populates='findings')
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
+    step_type = db.Column(db.String(50), nullable=False)
+    summary = db.Column(db.Text, nullable=False)
+    annual_savings_usd = db.Column(db.Float)
+    upgrade_cost_usd = db.Column(db.Float)
+    payback_years = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    audit = db.relationship("Audit", backref=db.backref("recommendations", lazy=True))
