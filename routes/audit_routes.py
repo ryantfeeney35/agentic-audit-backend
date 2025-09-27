@@ -95,7 +95,7 @@ def get_audit(audit_id):
                 "id": step.id,
                 "step_type": step.step_type,
                 "label": step.label,
-                "is_completed": step.is_completed
+                "status": step.status
             }
             for step in audit.steps
         ]
@@ -173,7 +173,7 @@ def handle_interview(audit_id):
         step_type='interview',
         label='Initial Interview',
         notes="Interview completed",
-        is_completed=True
+        status="Completed",  # new status column
     )
     db.session.add(step)
     db.session.commit()
@@ -238,7 +238,7 @@ def handle_utility_bill(audit_id):
         step_type='interview',
         label='Utility Bill',
         notes="Utility bill uploaded",
-        is_completed=True
+        status="Completed",  # new status column
     )
     db.session.add(step)
     db.session.commit()
