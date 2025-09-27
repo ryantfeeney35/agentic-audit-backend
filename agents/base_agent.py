@@ -1,4 +1,3 @@
-# agents/base_agent.py
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
@@ -10,7 +9,8 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
     """Run a domain-specific agent (insulation, siding, hvac) with structured output."""
 
     parser = PydanticOutputParser(pydantic_object=AgentOutput)
-    format_instructions = parser.get_format_instructions()
+    # Escape braces to avoid KeyError
+    format_instructions = parser.get_format_instructions().replace("{", "{{").replace("}", "}}")
 
     if bootstrap:
         instructions = f"""
@@ -32,10 +32,12 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
         {format_instructions}
         """
 
+    # Build template (instructions + context)
     prompt = ChatPromptTemplate.from_messages([
         ("system", instructions.strip()),
         ("user", context),
     ])
 
+    # No kwargs substitution — safe now
     resp = llm(prompt.format_messages())
     return parser.parse(resp.content)
