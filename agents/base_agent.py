@@ -26,15 +26,20 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
             "- If no further questions, return an empty list.\n"
         )
 
-    # ✅ Add parser instructions directly instead of via str.format()
-    full_instructions = instructions + "\n" + parser.get_format_instructions()
+    # ✅ Concatenate parser instructions directly (no formatting!)
+    full_instructions = instructions + "\n\n" + parser.get_format_instructions()
 
+    # Build prompt
     prompt = ChatPromptTemplate.from_messages([
         ("system", full_instructions),
         ("user", context),
     ])
 
+    # ✅ No kwargs, no formatting — just get messages
     final_prompt = prompt.format_messages()
 
+    # Call model
     resp = llm(final_prompt)
+
+    # Parse into structured object
     return parser.parse(resp.content)
