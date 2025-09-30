@@ -1,6 +1,7 @@
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import AgentOutput
+import logging
 
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
@@ -34,8 +35,16 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
         {"role": "user", "content": context},
     ]
 
-    # Call LLM
-    resp = llm.invoke(messages)
+    # 🔍 Debug: log what’s going into the LLM
+    logger.debug("=== Running %s Agent ===", domain)
+    for msg in final_prompt:
+        logger.debug("[%s] %s", msg.type, msg.content)
+
+    resp = llm(final_prompt)
+
+    # 🔍 Debug: log raw response
+    logger.debug("=== %s Agent Response ===", domain)
+    logger.debug(resp.content)
 
     # Parse into structured object
     return parser.parse(resp.content)
