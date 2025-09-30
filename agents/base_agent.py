@@ -2,6 +2,7 @@ import logging
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import AgentOutput
+from models import AgentConversation, db  # only if you want to persist
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -49,6 +50,23 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
     # 🔍 Log raw LLM response
     logger.debug("=== %s Agent Response ===", domain)
     logger.debug(resp.content)
+
+    # Optional: persist to DB
+    if audit_id:
+        for msg in messages:
+            db.session.add(AgentConversation(
+                audit_id=audit_id,
+                domain=domain,
+                role=msg["role"],
+                content=msg["content"],
+            ))
+        db.session.add(AgentConversation(
+            audit_id=audit_id,
+            domain=domain,
+            role="assistant",
+            content=resp.content,
+        ))
+        db.session.commit()
 
     # Parse into structured object
     return parser.parse(resp.content)
