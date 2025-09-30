@@ -1,22 +1,20 @@
-from langchain.prompts import ChatPromptTemplate
+import logging
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import AgentOutput
-import logging
 
-# at the top of base_agent.py
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
-def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput:
+def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int | None = None) -> AgentOutput:
     """Run a domain-specific agent (insulation, siding, hvac) with structured output."""
 
     parser = PydanticOutputParser(pydantic_object=AgentOutput)
 
     if bootstrap:
-        instructions = (
+        system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review provided context.\n"
             "- Provide a short summary of findings in `summary`.\n"
@@ -24,36 +22,33 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
             "- Do not make upgrade recommendations yet.\n"
         )
     else:
-        instructions = (
+        system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- DO NOT summarize.\n"
             "- ONLY output NEW follow-up questions in `followup_questions`.\n"
             "- If no further questions, return an empty list.\n"
         )
 
-    # ✅ Concatenate parser instructions directly (no formatting!)
-    full_instructions = instructions + "\n\n" + parser.get_format_instructions()
+    # ✅ Manually concatenate instructions and parser schema
+    system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 
-    # Build prompt
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", full_instructions),
-        ("user", context),
-    ])
+    # Build final messages
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": context},
+    ]
 
-    # ✅ No kwargs, no formatting — just get messages
-    final_prompt = prompt.format_messages(
-        format_instructions=parser.get_format_instructions()
-    )
-
-    # 🔍 Debug: log what’s going into the LLM
+    # 🔍 Debug log
     logger.debug("=== Running %s Agent ===", domain)
-    for msg in final_prompt:
-        logger.debug("[%s] %s", msg.type, msg.content)
+    for msg in messages:
+        logger.debug("[%s] %s", msg["role"], msg["content"])
 
-    resp = llm(final_prompt)
+    # Call LLM
+    resp = llm.invoke(messages)
 
-    # 🔍 Debug: log raw response
+    # 🔍 Log raw LLM response
     logger.debug("=== %s Agent Response ===", domain)
     logger.debug(resp.content)
 
+    # Parse into structured object
     return parser.parse(resp.content)
