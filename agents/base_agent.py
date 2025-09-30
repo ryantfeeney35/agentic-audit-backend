@@ -1,3 +1,4 @@
+from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import AgentOutput
@@ -15,7 +16,7 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
     parser = PydanticOutputParser(pydantic_object=AgentOutput)
 
     if bootstrap:
-        system_instructions = (
+        instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review provided context.\n"
             "- Provide a short summary of findings in `summary`.\n"
@@ -23,21 +24,26 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
             "- Do not make upgrade recommendations yet.\n"
         )
     else:
-        system_instructions = (
+        instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- DO NOT summarize.\n"
             "- ONLY output NEW follow-up questions in `followup_questions`.\n"
             "- If no further questions, return an empty list.\n"
         )
 
-    # ✅ Manually concatenate instructions and parser schema
-    system_message = system_instructions + "\n\n" + parser.get_format_instructions()
+    # ✅ Concatenate parser instructions directly (no formatting!)
+    full_instructions = instructions + "\n\n" + parser.get_format_instructions()
 
-    # Build final messages without ChatPromptTemplate
-    messages = [
-        {"role": "system", "content": system_message},
-        {"role": "user", "content": context},
-    ]
+    # Build prompt
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", full_instructions),
+        ("user", context),
+    ])
+
+    # ✅ No kwargs, no formatting — just get messages
+    final_prompt = prompt.format_messages(
+        format_instructions=parser.get_format_instructions()
+    )
 
     # 🔍 Debug: log what’s going into the LLM
     logger.debug("=== Running %s Agent ===", domain)
@@ -50,5 +56,4 @@ def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput
     logger.debug("=== %s Agent Response ===", domain)
     logger.debug(resp.content)
 
-    # Parse into structured object
     return parser.parse(resp.content)
