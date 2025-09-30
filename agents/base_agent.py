@@ -3,6 +3,10 @@ from langchain_openai import ChatOpenAI
 from .schemas import AgentOutput
 import logging
 
+# at the top of base_agent.py
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
+
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
 def run_agent(domain: str, context: str, bootstrap: bool = False) -> AgentOutput:
