@@ -61,7 +61,7 @@ def run_agent(
             "- You MUST always return valid JSON that conforms exactly to the schema.\n"
             "- Populate ONLY the `recommendations` field. Leave `summary` as null and `followup_questions` as [].\n"
             "- Each recommendation object must include:\n"
-            "   • step_type (string)\n"
+            "   • `step_type`: MUST be one of ['exterior', 'hvac', 'insulation']\n"
             "   • summary (string)\n"
             "   • annual_savings_usd (number)\n"
             "   • upgrade_cost_usd (number)\n"
