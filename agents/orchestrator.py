@@ -26,6 +26,21 @@ class OrchestratorAgent:
         db.session.commit()
         return msg
 
+    def _get_history(self) -> str:
+        """Return conversation history (excluding orchestrator summaries)."""
+        rows = (
+            AgentConversation.query
+            .filter_by(audit_id=self.audit_id)
+            .order_by(AgentConversation.created_at.asc())
+            .all()
+        )
+        history_lines = []
+        for r in rows:
+            if r.domain == "orchestrator" and r.role == "assistant":
+                continue  # skip orchestrator summaries
+            history_lines.append(f"[{r.role}/{r.domain}] {r.content}")
+        return "\n".join(history_lines)
+
     def bootstrap(self) -> str:
         """Initial run: summarize findings + ask follow-up questions."""
         logger.info("🚀 Orchestrator bootstrap started (audit_id=%s)", self.audit_id)
@@ -33,7 +48,7 @@ class OrchestratorAgent:
         context = build_audit_context(self.audit_id)
         logger.info("📄 Context built (len=%d)", len(context))
 
-        # Run specialized agents
+        # Run specialized agents with full context
         outputs = {}
         for domain in ["insulation", "siding", "hvac"]:
             logger.info("➡️ Dispatching bootstrap to %s agent", domain)
@@ -43,7 +58,7 @@ class OrchestratorAgent:
                             domain,
                             outputs[domain].summary,
                             outputs[domain].followup_questions)
-            except Exception as e:
+            except Exception:
                 logger.exception("❌ %s agent failed during bootstrap", domain)
                 outputs[domain] = None
 
@@ -72,16 +87,22 @@ class OrchestratorAgent:
         logger.info("💬 Orchestrator handling user answer (audit_id=%s)", self.audit_id)
         self._save_message("user", "orchestrator", user_answer)
 
-        context = build_audit_context(self.audit_id)
-        logger.info("📄 Context rebuilt (len=%d)", len(context))
+        # Always log full context for auditing
+        full_context = build_audit_context(self.audit_id)
+        logger.info("📄 Full context rebuilt (len=%d)", len(full_context))
+        self._save_message("system", "orchestrator", f"[FULL CONTEXT SNAPSHOT]\n{full_context[:2000]}...")
+
+        # Build lightweight context: conversation history + new user answer
+        history = self._get_history()
+        agent_context = f"Conversation so far:\n{history}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
         for domain in ["insulation", "siding", "hvac"]:
             logger.info("➡️ Dispatching follow-up to %s agent", domain)
             try:
-                outputs[domain] = run_agent(domain, context, bootstrap=False, audit_id=self.audit_id)
+                outputs[domain] = run_agent(domain, agent_context, bootstrap=False, audit_id=self.audit_id)
                 logger.info("✅ %s agent followups=%s", domain, outputs[domain].followup_questions)
-            except Exception as e:
+            except Exception:
                 logger.exception("❌ %s agent failed during follow-up", domain)
                 outputs[domain] = None
 
