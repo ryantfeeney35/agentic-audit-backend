@@ -8,3 +8,5 @@ flask_migrate
 supabase
 openai
 PyMuPDF
+langchain
+langchain-openai
