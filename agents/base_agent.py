@@ -15,7 +15,7 @@ def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
     try:
         logger.debug("=== [%s] Sending to LLM ===", domain)
         for msg in messages:
-            logger.debug("[%s] %s", msg["role"], msg["content"][:500])  # log first 500 chars
+            logger.debug("[%s] %s", msg["role"], msg["content"][:500])
         resp = llm.invoke(messages)
         logger.debug("=== [%s] LLM Response ===", domain)
         logger.debug(resp.content)
@@ -33,42 +33,38 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
     if bootstrap:
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Review provided context.\n"
-            "- Provide a short summary of findings in `summary`.\n"
-            "- If important quantitative or qualitative details are missing "
-            "(e.g., R-values, SEER/HSPF, duct insulation, filter status, etc.), "
-            "ALWAYS ask clear follow-up questions.\n"
-            "- Even if context includes recommendations, do not assume the investigation is complete — "
-            "verify by asking targeted questions.\n"
-            "- Only return an empty list if absolutely all critical details for {domain} assessment are fully known.\n"
-            "- Provide clear follow-up questions in `followup_questions`.\n"
-            "- Do not make upgrade recommendations yet.\n"
+            "- Review provided context carefully.\n"
+            "- You MUST always return valid JSON that conforms exactly to the schema below.\n"
+            "- Fill out BOTH fields:\n"
+            "   • `summary`: 1–3 sentences of findings.\n"
+            "   • `followup_questions`: a list of missing quantitative/qualitative details "
+            "(e.g., R-values, insulation type, SEER/HSPF ratings, duct insulation, filter condition).\n"
+            "- If absolutely nothing is missing, set `followup_questions` to an empty list [].\n"
+            "- Do NOT make upgrade recommendations yet.\n"
         )
     else:
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- DO NOT summarize.\n"
+            "- You MUST always return valid JSON that conforms exactly to the schema below.\n"
+            "- Do NOT summarize.\n"
             "- ONLY output NEW follow-up questions in `followup_questions`.\n"
-            "- If no further questions, return an empty list.\n"
+            "- If no further questions, return an empty list [].\n"
         )
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 
-    # Build final messages
     messages = [
         {"role": "system", "content": system_message},
         {"role": "user", "content": context},
     ]
 
-    # 🔍 Debug log context explicitly
     logger.info("➡️ Running %s agent (bootstrap=%s, ctx_len=%d)", domain, bootstrap, len(context))
-    logger.debug("=== %s Context Preview ===\n%s", domain, context[:1000])  # first 1000 chars
+    logger.debug("=== %s Context Preview ===\n%s", domain, context[:1000])
 
     resp_text = run_orchestrator_chat(messages, domain)
 
-    # ✅ Persist everything
+    # ✅ Persist conversation
     if audit_id:
-        # Save system instructions and user context separately for clarity
         db.session.add(AgentConversation(
             audit_id=audit_id,
             domain=domain,
@@ -89,5 +85,12 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
         ))
         db.session.commit()
 
-    # Parse into structured object
-    return parser.parse(resp_text)
+    # ✅ Robust parsing: force schema compliance
+    try:
+        parsed = parser.parse(resp_text)
+    except Exception as e:
+        logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)
+        # fallback object so orchestrator doesn’t break
+        parsed = AgentOutput(summary="", followup_questions=[])
+
+    return parsed
