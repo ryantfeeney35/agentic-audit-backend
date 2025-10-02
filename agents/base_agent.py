@@ -58,15 +58,15 @@ def run_agent(
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review the context carefully.\n"
-            "- You MUST always return valid JSON conforming to the schema.\n"
-            "- Populate the `recommendations` field with a list of objects including:\n"
+            "- You MUST always return valid JSON that conforms exactly to the schema.\n"
+            "- Populate ONLY the `recommendations` field. Leave `summary` as null and `followup_questions` as [].\n"
+            "- Each recommendation object must include:\n"
             "   • step_type (string)\n"
             "   • summary (string)\n"
             "   • annual_savings_usd (number)\n"
             "   • upgrade_cost_usd (number)\n"
             "   • payback_years (number or null)\n"
-            "- Do not output follow-up questions here.\n"
-            "- If no upgrades apply, return an empty list [].\n"
+            "- If no upgrades apply, return `recommendations: []`.\n"
         )
     else:  # followup
         system_instructions = (
