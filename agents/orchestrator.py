@@ -2,7 +2,7 @@
 import logging
 from .base_agent import run_agent
 from .context_builder import build_audit_context
-from models import AgentConversation, db
+from models import AgentConversation, Audit, AuditRecommendation, db
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
