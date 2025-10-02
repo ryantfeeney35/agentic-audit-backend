@@ -120,16 +120,29 @@ class OrchestratorAgent:
         self._save_message("assistant", "orchestrator", final_reply)
         return final_reply
     
-    def generate_recommendations(self):
+        def generate_recommendations(self):
         context = build_audit_context(self.audit_id)
         outputs = {}
         for domain in ["insulation", "siding", "hvac"]:
-            outputs[domain] = run_agent(domain, context, bootstrap=False, audit_id=self.audit_id, mode="recommendations")
+            outputs[domain] = run_agent(
+                domain,
+                context,
+                bootstrap=False,
+                audit_id=self.audit_id,
+                mode="recommendations"
+            )
 
         all_recs = []
         for domain, out in outputs.items():
             if out and out.recommendations:
                 all_recs.extend(out.recommendations)
+
+        # helper to coerce floats
+        def safe_float(val):
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return None
 
         # Save to DB
         AuditRecommendation.query.filter_by(audit_id=self.audit_id).delete()
@@ -137,11 +150,11 @@ class OrchestratorAgent:
         for rec in all_recs:
             r = AuditRecommendation(
                 audit_id=self.audit_id,
-                step_type=rec.step_type,
-                summary=rec.summary,
-                annual_savings_usd=rec.annual_savings_usd,
-                upgrade_cost_usd=rec.upgrade_cost_usd,
-                payback_years=rec.payback_years,
+                step_type=str(rec.step_type or "general"),
+                summary=str(rec.summary or ""),
+                annual_savings_usd=safe_float(rec.annual_savings_usd),
+                upgrade_cost_usd=safe_float(rec.upgrade_cost_usd),
+                payback_years=safe_float(rec.payback_years),
             )
             db.session.add(r)
             saved.append(r)
