@@ -30,50 +30,73 @@ def run_agent(
     context: str,
     bootstrap: bool = False,
     audit_id: int | None = None,
-    mode: str = "followup",   # 🔑 new param: "bootstrap" | "followup" | "recommendations"
+    mode: str = "followup",   # "bootstrap" | "followup" | "recommendations" | "media"
 ) -> AgentOutput:
-    """
-    Run a domain-specific agent (insulation, siding, hvac) with structured output.
-    mode:
-      - "bootstrap": initial run (summary + follow-up questions)
-      - "followup": only new follow-up questions
-      - "recommendations": generate upgrade recs with ROI
-    """
-
     parser = PydanticOutputParser(pydantic_object=AgentOutput)
 
-    # === System instructions ===
     if mode == "bootstrap":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review provided context carefully.\n"
             "- You MUST always return valid JSON conforming to the schema.\n"
-            "- Fill BOTH fields:\n"
-            "   • `summary`: 1–3 sentences of findings.\n"
-            "   • `followup_questions`: a list of missing details (e.g., R-values, SEER/HSPF, duct insulation).\n"
-            "- If nothing missing, set `followup_questions` to [].\n"
+            "- Fill BOTH fields: `summary` + `followup_questions`.\n"
+            "- If nothing missing, `followup_questions=[]`.\n"
             "- Do NOT generate upgrade recommendations yet.\n"
         )
     elif mode == "recommendations":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review the context carefully.\n"
-            "- You MUST always return valid JSON that conforms exactly to the schema.\n"
-            "- Populate ONLY the `recommendations` field. Leave `summary` as null and `followup_questions` as [].\n"
-            "- Each recommendation object must include:\n"
-            "   • `step_type`: MUST be one of ['exterior', 'hvac', 'insulation']\n"
-            "   • summary (string)\n"
-            "   • annual_savings_usd (number)\n"
-            "   • upgrade_cost_usd (number)\n"
-            "   • payback_years (number or null)\n"
-            "- If no upgrades apply, return `recommendations: []`.\n"
+            "- You MUST always return valid JSON conforming to the schema.\n"
+            "- Populate ONLY the `recommendations` field.\n"
+            "- If no upgrades apply, return [].\n"
         )
+    elif mode == "media":
+        if domain == "insulation":
+            system_instructions = (
+                f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
+                "You will be given raw context extracted from media (photo/video/audio).\n"
+                "Analyze according to CREIA protocol:\n"
+                "- Identify insulation type (fiberglass, cellulose, rockwool, foam, etc.)\n"
+                "- Estimate thickness/depth if visible\n"
+                "- Rate condition: Good (continuous), Fair (minor gaps), Poor (missing/major gaps)\n"
+                "- Flag issues: thermal breaks, gaps, attic scuttle covers, recessed lights, air leakage\n"
+                "- Mention efficiency/comfort implications.\n"
+                "Return valid JSON per the schema. Put your output in `summary`.\n"
+                "Do NOT generate follow-up questions or recommendations here."
+            )
+        elif domain == "hvac":
+            system_instructions = (
+                f"You are the {domain.upper()} Agent. Focus ONLY on {domain} systems.\n"
+                "You will be given raw context extracted from media (photo/video/audio).\n"
+                "Analyze according to CREIA protocol:\n"
+                "- Identify system type (furnace, heat pump, mini-split, etc.)\n"
+                "- Note brand, model, efficiency ratings (AFUE, SEER, HSPF) if visible\n"
+                "- Assess age/condition (wear, rust, leaks)\n"
+                "- Evaluate ducting: type, sealing, insulation, asbestos tape, filter condition\n"
+                "- Flag safety issues: cracked heat exchanger, CO risk, dirty/absent filters\n"
+                "- Mention efficiency implications.\n"
+                "Return valid JSON per the schema. Put your output in `summary`.\n"
+                "Do NOT generate follow-up questions or recommendations here."
+            )
+        else:  # exterior
+            system_instructions = (
+                f"You are the Exterior Agent. Focus ONLY on exterior envelope.\n"
+                "You will be given raw context extracted from media (photo/video/audio).\n"
+                "Analyze according to CREIA protocol:\n"
+                "- Note shading (trees, eaves, landscape, nearby structures)\n"
+                "- Assess glass–wall ratio (window area vs wall) and implications\n"
+                "- Identify siding type (stucco, wood, vinyl, fiberboard, etc.)\n"
+                "- Highlight comfort/efficiency impacts based on orientation.\n"
+                "Return valid JSON per the schema. Put your output in `summary`.\n"
+                "Do NOT generate follow-up questions or recommendations here."
+            )
     else:  # followup
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- You MUST always return valid JSON conforming to the schema.\n"
             "- Do NOT summarize.\n"
-            "- ONLY output NEW `followup_questions`.\n"
+            "- ONLY output new `followup_questions`.\n"
             "- If no further questions, return [].\n"
         )
 

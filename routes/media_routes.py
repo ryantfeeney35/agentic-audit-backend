@@ -5,7 +5,7 @@ import base64
 import tempfile
 import subprocess
 from threading import Thread
-
+from agents.base_agent import run_agent
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from supabase import create_client
@@ -304,42 +304,42 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
         new_status = "Error"
         try:
             media = AuditMedia.query.get(media_id)
+            step = AuditStep.query.get(media.step_id) if media else None
             step_type = media.step_type if media else "exterior"
-            print(f"🚀 [process_media_async] media_id={media_id}, type={media_type}, step_type={step_type}, orientation={orientation}")
 
+            # Step 1: Extract raw context from the media
             if media_type == "photo":
-                summary = summarize_image(local_path, step_type=step_type, orientation=orientation)
-                new_status = "Completed"
+                raw_context = summarize_image(local_path, step_type=step_type, orientation=orientation)
             elif media_type == "video":
-                summary = summarize_video(local_path, step_type=step_type, orientation=orientation)
-                new_status = "Completed"
+                raw_context = summarize_video(local_path, step_type=step_type, orientation=orientation)
             elif media_type == "audio":
-                transcript = summarize_audio(local_path)
-                summary = f"Audio transcript: {transcript}"
-                new_status = "Completed"
+                raw_context = summarize_audio(local_path)
             else:
-                summary = "ℹ️ Unsupported media type"
-                new_status = "Error"
+                raw_context = "Unsupported media"
+
+            # Step 2: Run through agent with mode="media"
+            parsed = run_agent(
+                domain=step_type,
+                context=raw_context,
+                audit_id=media.audit_id,
+                mode="media"
+            )
+
+            summary = parsed.summary or raw_context
+            new_status = "Completed"
+
         except Exception as e:
-            print(f"❌ [process_media_async] Error: {e}")
             summary = f"❌ Failed to process: {e}"
             new_status = "Error"
 
-        # Save back
-        media = AuditMedia.query.get(media_id)
+        # Step 3: Save results
         if media:
             media.summary = summary
             db.session.commit()
-            print(f"✅ [process_media_async] Saved summary for media_id={media_id}")
 
-            # Also update step status
-            step = AuditStep.query.get(media.step_id)
-            if step:
-                step.status = new_status
-                db.session.commit()
-                print(f"📌 Step {step.id} status -> {new_status}")
-            else:
-                print(f"⚠️ [process_media_async] Step {media.step_id} not found at save time")
+        if step:
+            step.status = new_status
+            db.session.commit()
 
 # -------------------------
 # Routes
