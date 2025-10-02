@@ -9,6 +9,25 @@ logging.basicConfig(level=logging.DEBUG)
 
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
+
+def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
+    """Wrapper around llm.invoke that logs/persists inputs + outputs."""
+    try:
+        logger.debug("=== [%s] Sending to LLM ===", domain)
+        for msg in messages:
+            logger.debug("[%s] %s", msg["role"], msg["content"])
+
+        resp = llm.invoke(messages)
+
+        logger.debug("=== [%s] LLM Response ===", domain)
+        logger.debug(resp.content)
+
+        return resp.content
+    except Exception as e:
+        logger.error("❌ LLM call failed for [%s]: %s", domain, e, exc_info=True)
+        raise
+
+
 def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int | None = None) -> AgentOutput:
     """Run a domain-specific agent (insulation, siding, hvac) with structured output."""
 
@@ -19,6 +38,9 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review provided context.\n"
             "- Provide a short summary of findings in `summary`.\n"
+            "- If important quantitative or qualitative details are missing (e.g., R-values, SEER/HSPF, duct insulation, filter status, etc.), ALWAYS ask clear follow-up questions.\n"
+            "- Even if context includes recommendations, do not assume the investigation is complete — verify by asking targeted questions.\n"
+            "- Only return an empty list if absolutely all critical details for {domain} assessment are fully known."
             "- Provide clear follow-up questions in `followup_questions`.\n"
             "- Do not make upgrade recommendations yet.\n"
         )
@@ -39,17 +61,8 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
         {"role": "user", "content": context},
     ]
 
-    # 🔍 Debug log
-    logger.debug("=== Running %s Agent ===", domain)
-    for msg in messages:
-        logger.debug("[%s] %s", msg["role"], msg["content"])
-
-    # Call LLM
-    resp = llm.invoke(messages)
-
-    # 🔍 Log raw LLM response
-    logger.debug("=== %s Agent Response ===", domain)
-    logger.debug(resp.content)
+    # Call wrapped LLM
+    resp_text = run_orchestrator_chat(messages, domain)
 
     # Optional: persist to DB
     if audit_id:
@@ -64,9 +77,9 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
             audit_id=audit_id,
             domain=domain,
             role="assistant",
-            content=resp.content,
+            content=resp_text,
         ))
         db.session.commit()
 
     # Parse into structured object
-    return parser.parse(resp.content)
+    return parser.parse(resp_text)
