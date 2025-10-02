@@ -91,25 +91,25 @@ def run_agent(
 
     # ✅ Persist conversation
     if audit_id and mode in ["bootstrap", "followup"]:
-    db.session.add(AgentConversation(
-        audit_id=audit_id,
-        domain=domain,
-        role="system",
-        content=system_message,
-    ))
-    db.session.add(AgentConversation(
-        audit_id=audit_id,
-        domain=domain,
-        role="user",
-        content=context,
-    ))
-    db.session.add(AgentConversation(
-        audit_id=audit_id,
-        domain=domain,
-        role="assistant",
-        content=resp_text,
-    ))
-    db.session.commit()
+        db.session.add(AgentConversation(
+            audit_id=audit_id,
+            domain=domain,
+            role="system",
+            content=system_message,
+        ))
+        db.session.add(AgentConversation(
+            audit_id=audit_id,
+            domain=domain,
+            role="user",
+            content=context,
+        ))
+        db.session.add(AgentConversation(
+            audit_id=audit_id,
+            domain=domain,
+            role="assistant",
+            content=resp_text,
+        ))
+        db.session.commit()
 
     # ✅ Robust parsing
     try:
