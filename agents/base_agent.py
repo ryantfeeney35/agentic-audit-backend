@@ -25,30 +25,56 @@ def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
         raise
 
 
-def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int | None = None) -> AgentOutput:
-    """Run a domain-specific agent (insulation, siding, hvac) with structured output."""
+def run_agent(
+    domain: str,
+    context: str,
+    bootstrap: bool = False,
+    audit_id: int | None = None,
+    mode: str = "followup",   # 🔑 new param: "bootstrap" | "followup" | "recommendations"
+) -> AgentOutput:
+    """
+    Run a domain-specific agent (insulation, siding, hvac) with structured output.
+    mode:
+      - "bootstrap": initial run (summary + follow-up questions)
+      - "followup": only new follow-up questions
+      - "recommendations": generate upgrade recs with ROI
+    """
 
     parser = PydanticOutputParser(pydantic_object=AgentOutput)
 
-    if bootstrap:
+    # === System instructions ===
+    if mode == "bootstrap":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Review provided context carefully.\n"
-            "- You MUST always return valid JSON that conforms exactly to the schema below.\n"
-            "- Fill out BOTH fields:\n"
+            "- You MUST always return valid JSON conforming to the schema.\n"
+            "- Fill BOTH fields:\n"
             "   • `summary`: 1–3 sentences of findings.\n"
-            "   • `followup_questions`: a list of missing quantitative/qualitative details "
-            "(e.g., R-values, insulation type, SEER/HSPF ratings, duct insulation, filter condition).\n"
-            "- If absolutely nothing is missing, set `followup_questions` to an empty list [].\n"
-            "- Do NOT make upgrade recommendations yet.\n"
+            "   • `followup_questions`: a list of missing details (e.g., R-values, SEER/HSPF, duct insulation).\n"
+            "- If nothing missing, set `followup_questions` to [].\n"
+            "- Do NOT generate upgrade recommendations yet.\n"
         )
-    else:
+    elif mode == "recommendations":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- You MUST always return valid JSON that conforms exactly to the schema below.\n"
+            "- Review the context carefully.\n"
+            "- You MUST always return valid JSON conforming to the schema.\n"
+            "- Populate the `recommendations` field with a list of objects including:\n"
+            "   • step_type (string)\n"
+            "   • summary (string)\n"
+            "   • annual_savings_usd (number)\n"
+            "   • upgrade_cost_usd (number)\n"
+            "   • payback_years (number or null)\n"
+            "- Do not output follow-up questions here.\n"
+            "- If no upgrades apply, return an empty list [].\n"
+        )
+    else:  # followup
+        system_instructions = (
+            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
+            "- You MUST always return valid JSON conforming to the schema.\n"
             "- Do NOT summarize.\n"
-            "- ONLY output NEW follow-up questions in `followup_questions`.\n"
-            "- If no further questions, return an empty list [].\n"
+            "- ONLY output NEW `followup_questions`.\n"
+            "- If no further questions, return [].\n"
         )
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
@@ -58,7 +84,7 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
         {"role": "user", "content": context},
     ]
 
-    logger.info("➡️ Running %s agent (bootstrap=%s, ctx_len=%d)", domain, bootstrap, len(context))
+    logger.info("➡️ Running %s agent (mode=%s, ctx_len=%d)", domain, mode, len(context))
     logger.debug("=== %s Context Preview ===\n%s", domain, context[:1000])
 
     resp_text = run_orchestrator_chat(messages, domain)
@@ -85,12 +111,11 @@ def run_agent(domain: str, context: str, bootstrap: bool = False, audit_id: int 
         ))
         db.session.commit()
 
-    # ✅ Robust parsing: force schema compliance
+    # ✅ Robust parsing
     try:
         parsed = parser.parse(resp_text)
     except Exception as e:
         logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)
-        # fallback object so orchestrator doesn’t break
-        parsed = AgentOutput(summary="", followup_questions=[])
+        parsed = AgentOutput(summary="", followup_questions=[], recommendations=[])
 
     return parsed

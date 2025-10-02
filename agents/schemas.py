@@ -1,18 +1,18 @@
+# agents/schemas.py
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
-class AgentOutput(BaseModel):
-    """Structured output from a domain-specific agent."""
+class Recommendation(BaseModel):
+    step_type: str
+    summary: str
+    annual_savings_usd: float
+    upgrade_cost_usd: float
+    payback_years: Optional[float]
 
-    summary: Optional[str] = Field(
-        None,
-        description="Short summary of findings (only used during bootstrap)."
-    )
-    followup_questions: List[str] = Field(
-        default_factory=list,
-        description="List of follow-up questions (empty if none)."
-    )
+class AgentOutput(BaseModel):
+    summary: Optional[str] = Field(None)
+    followup_questions: List[str] = Field(default_factory=list)
+    recommendations: List[Recommendation] = Field(default_factory=list)
 
     def json(self) -> str:
-        """Return as a JSON string (for saving to DB)."""
         return self.model_dump_json(indent=2)
