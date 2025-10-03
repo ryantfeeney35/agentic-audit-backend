@@ -56,6 +56,7 @@ class AuditMedia(db.Model):
     audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
     step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete="CASCADE"), nullable=True)
     step_type = db.Column(db.String, nullable=False)
+    audit_media_name = db.Column(db.String, nullable=True)
     side = db.Column(db.String, nullable=True)
     media_url = db.Column(db.String, nullable=True)
     file_name = db.Column(db.String, nullable=True)

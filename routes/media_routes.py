@@ -360,6 +360,7 @@ def upload_media_by_step_label(audit_id, step_label):
 
     step_type = request.form.get('step_type', 'exterior')
     media_type = request.form.get('media_type', 'photo')
+    audit_media_name = request.form.get('audit_media_name')  # Optional friendly name for this media item
     print(f"⬆️ [upload_media_by_step_label] step_type={step_type}, media_type={media_type}")
 
     # Find/create step
@@ -419,6 +420,7 @@ def upload_media_by_step_label(audit_id, step_label):
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
+            audit_media_name=audit_media_name,
             summary="Processing…"
         )
         db.session.add(media_row)
@@ -437,7 +439,8 @@ def upload_media_by_step_label(audit_id, step_label):
             "id": media_row.id,
             "media_url": public_url,
             "summary": media_row.summary,
-            "status": step.status
+            "status": step.status,
+            "audit_media_name": media_row.audit_media_name
         }), 201
 
     except Exception as e:
@@ -468,6 +471,7 @@ def upload_step_media(step_id):
         return jsonify({'error': 'Step not found'}), 404
 
     media_type = request.form.get('media_type', 'photo')
+    audit_media_name = request.form.get('audit_media_name')
     print(f"⬆️ [upload_step_media] step_type={step.step_type}, media_type={media_type}")
 
     try:
@@ -502,6 +506,7 @@ def upload_step_media(step_id):
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
+            audit_media_name=audit_media_name,
             summary="Processing…"
         )
         db.session.add(media_row)
@@ -519,7 +524,8 @@ def upload_step_media(step_id):
             "id": media_row.id,
             "media_url": public_url,
             "summary": media_row.summary,
-            "status": "processing"
+            "status": "processing",
+            "audit_media_name": media_row.audit_media_name
         }), 201
 
     except Exception as e:
@@ -543,6 +549,7 @@ def get_audit_media(audit_id):
         "media_url": m.media_url,
         "file_name": m.file_name,
         "media_type": m.media_type,
+        "audit_media_name": m.audit_media_name,
         "summary": m.summary,
         "created_at": m.created_at.isoformat()
     } for m in media]
@@ -564,8 +571,18 @@ def get_step_media(step_id):
         "media_url": m.media_url,
         "file_name": m.file_name,
         "media_type": m.media_type,
+        "audit_media_name": m.audit_media_name,
         "summary": m.summary,
         "created_at": m.created_at.isoformat()
     } for m in media]
     print(f"📤 [get_step_media] returning {len(payload)} items")
     return jsonify(payload)
+
+@bp.route('/media/<int:media_id>', methods=['DELETE'])
+def delete_media(media_id):
+    media = AuditMedia.query.get(media_id)
+    if not media:
+        return jsonify({"error": "Not found"}), 404
+    db.session.delete(media)
+    db.session.commit()
+    return jsonify({"message": "Media deleted", "id": media_id})

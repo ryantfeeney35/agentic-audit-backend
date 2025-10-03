@@ -153,10 +153,30 @@ def handle_interview(audit_id):
                 {"role": "user", "content": transcript}
             ]
         )
-        summary = summary_resp.choices[0].message.content
+        summary = summary_resp.choices[0].message.content.strip()
     except Exception as e:
         os.remove(temp_path)
         return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
+
+    # Step 2b: Generate short audit_media_name (≤50 chars)
+    try:
+        name_resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "You are an assistant generating a short descriptive title for an interview recording. "
+                    "Return only a short label (≤5 words, ≤50 characters) that captures the essence of the summary. "
+                    "Do not add quotes or extra words."
+                )},
+                {"role": "user", "content": summary}
+            ]
+        )
+        audit_media_name = name_resp.choices[0].message.content.strip()
+        # enforce max length
+        if len(audit_media_name) > 50:
+            audit_media_name = audit_media_name[:47] + "..."
+    except Exception as e:
+        audit_media_name = "Interview Recording"
 
     # Step 3: Upload audio
     try:
@@ -176,7 +196,7 @@ def handle_interview(audit_id):
         step_type='interview',
         label='Initial Interview',
         notes="Interview completed",
-        status="Completed",  # new status column
+        status="Completed",
     )
     db.session.add(step)
     db.session.commit()
@@ -188,7 +208,8 @@ def handle_interview(audit_id):
         file_name=secure_filename(file.filename),
         media_type='audio',
         media_url=file_url,
-        summary=summary
+        summary=summary,
+        audit_media_name=audit_media_name
     )
     db.session.add(media)
     db.session.commit()
@@ -196,6 +217,7 @@ def handle_interview(audit_id):
     return jsonify({
         'transcript': transcript,
         'summary': summary,
+        'audit_media_name': audit_media_name,
         'media_url': file_url,
         'step_id': step.id,
         'media_id': media.id
