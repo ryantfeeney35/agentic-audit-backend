@@ -129,7 +129,19 @@ def handle_interview(audit_id):
         file.save(tmp.name)
         temp_path = tmp.name
 
-    # Step 1: Transcribe
+    # --- Step 1: Ensure interview step exists ---
+    step = AuditStep.query.filter_by(audit_id=audit_id, step_type="interview", label="Initial Interview").first()
+    if not step:
+        step = AuditStep(
+            audit_id=audit_id,
+            step_type="interview",
+            label="Initial Interview",
+            status="Processing"
+        )
+        db.session.add(step)
+        db.session.commit()
+
+    # --- Step 2: Transcribe this recording ---
     try:
         with open(temp_path, "rb") as f:
             transcript_resp = client.audio.transcriptions.create(
@@ -141,86 +153,69 @@ def handle_interview(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
-    # Step 2: Summarize
-    try:
-        summary_resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": (
-                    "You are an energy auditor assistant. Summarize the homeowner's concerns, comfort issues, "
-                    "and upgrade plans in concise, professional language."
-                )},
-                {"role": "user", "content": transcript}
-            ]
-        )
-        summary = summary_resp.choices[0].message.content.strip()
-    except Exception as e:
-        os.remove(temp_path)
-        return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
-
-    # Step 2b: Generate short audit_media_name (≤50 chars)
-    try:
-        name_resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "You are an assistant generating a short descriptive title for an interview recording. "
-                    "Return only a short label (≤5 words, ≤50 characters) that captures the essence of the summary. "
-                    "Do not add quotes or extra words."
-                )},
-                {"role": "user", "content": summary}
-            ]
-        )
-        audit_media_name = name_resp.choices[0].message.content.strip()
-        # enforce max length
-        if len(audit_media_name) > 50:
-            audit_media_name = audit_media_name[:47] + "..."
-    except Exception as e:
-        audit_media_name = "Interview Recording"
-
-    # Step 3: Upload audio
+    # --- Step 4: Upload audio ---
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
             audit_id=audit_id,
-            step_label='Initial Interview',
-            media_type='audio',
-            step_type='interview'
+            step_label="Initial Interview",
+            media_type="audio",
+            step_type="interview"
         )
     finally:
         os.remove(temp_path)
 
-    # Step 4: Save step + media
-    step = AuditStep(
-        audit_id=audit_id,
-        step_type='interview',
-        label='Initial Interview',
-        notes="Interview completed",
-        status="Completed",
-    )
-    db.session.add(step)
-    db.session.commit()
-
+    # --- Step 5: Save media row ---
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
-        step_type='interview',
         file_name=secure_filename(file.filename),
-        media_type='audio',
+        media_type="audio",
         media_url=file_url,
-        summary=summary,
-        audit_media_name=audit_media_name
+        notes=transcript,
     )
     db.session.add(media)
     db.session.commit()
 
+    # --- Step 6: Collect ALL interview recordings and re-summarize ---
+    all_media = AuditMedia.query.filter_by(audit_id=audit_id, step_id=step.id, media_type="audio").all()
+    all_summaries = [m.notes for m in all_media if m.notes]
+
+    if all_summaries:
+        try:
+            combined_prompt = (
+                "You are an energy auditor assistant. You will be given multiple interview recording transcriptions. "
+                "Synthesize them into a single unified homeowner interview summary:\n"
+                "- Capture comfort issues (hot/cold rooms, time of day, seasonal patterns)\n"
+                "- Capture remodeling/upgrade plans (HVAC, water heater, EV, etc.)\n"
+                "- Provide a professional, concise narrative suitable for an energy audit report.\n"
+            )
+            combined_resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": combined_prompt},
+                    {"role": "user", "content": "\n\n".join(all_summaries)}
+                ]
+            )
+            combined_summary = combined_resp.choices[0].message.content.strip()
+        except Exception as e:
+            combined_summary = "\n".join(all_summaries)
+
+        # Save to step summary
+        step.summary = combined_summary
+        step.status = "Completed"
+        db.session.commit()
+
+    # ✅ Generate first 5 words of transcript for display
+    short_label = " ".join(transcript.split()[:5]) + ("…" if len(transcript.split()) > 5 else "")
+
     return jsonify({
-        'transcript': transcript,
-        'summary': summary,
-        'audit_media_name': audit_media_name,
-        'media_url': file_url,
-        'step_id': step.id,
-        'media_id': media.id
+        "transcript": transcript,
+        "media_url": file_url,
+        "short_label": short_label,  # 👈 new field
+        "step_id": step.id,
+        "media_id": media.id,
+        "summary": step.summary
     })
 
 

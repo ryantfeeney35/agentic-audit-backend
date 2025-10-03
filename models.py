@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
+from sqlalchemy.dialects.postgresql import JSONB   # ✅ import JSONB
 
 db = SQLAlchemy()
 
@@ -37,32 +38,40 @@ class Audit(db.Model):
 
 
 class AuditStep(db.Model):
-    __tablename__ = 'audit_steps'
-    id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete='CASCADE'), nullable=False)
-    step_type = db.Column(db.String, nullable=False)  # e.g., 'exterior', 'attic'
-    label = db.Column(db.String, nullable=True)       # e.g., 'North Side', 'Attic Access Hatch'
-    status = db.Column(db.String(20), default="Not Started")  # New unified status
-    notes = db.Column(db.Text, nullable=True)
+    __tablename__ = "audit_steps"
 
-    # Relationships
-    audit = relationship('Audit', back_populates='steps')
-    media = relationship('AuditMedia', back_populates='step', cascade="all, delete-orphan")
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
+    step_type = db.Column(db.String, nullable=False)
+    label = db.Column(db.String, nullable=False)
+    status = db.Column(db.String, default="Not Started")
+
+    # Replaces `notes`
+    meta = db.Column(JSONB, default={})
+
+    # New fields
+    summary = db.Column(db.Text, nullable=True)       # Freeform text
+    ai_summary = db.Column(JSONB, default={})         # Structured AI output
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    media = db.relationship("AuditMedia", backref="step", cascade="all, delete-orphan")
 
 
 class AuditMedia(db.Model):
-    __tablename__ = 'audit_media'
+    __tablename__ = "audit_media"
+
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
-    step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete="CASCADE"), nullable=True)
-    step_type = db.Column(db.String, nullable=False)
-    audit_media_name = db.Column(db.String, nullable=True)
-    side = db.Column(db.String, nullable=True)
-    media_url = db.Column(db.String, nullable=True)
-    file_name = db.Column(db.String, nullable=True)
-    media_type = db.Column(db.String, nullable=True)  # e.g., 'photo', 'video'
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
+    step_id = db.Column(db.Integer, db.ForeignKey("audit_steps.id"), nullable=False)
+
+    media_url = db.Column(db.String, nullable=False)
+    file_name = db.Column(db.String, nullable=False)
+    media_type = db.Column(db.String, nullable=False)
+    notes = db.Column(db.String, nullable=True)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    summary = db.Column(db.Text)
 
     # Relationships
     audit = relationship('Audit', back_populates='media')
