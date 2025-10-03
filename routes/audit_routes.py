@@ -54,23 +54,24 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
     return resp.choices[0].message.content.strip()
 
 # --- Routes ---
-
 @bp.route('/audits', methods=['POST'])
 def create_audit():
     data = request.get_json()
     property_id = data.get("property_id")
+    audit_type = data.get("audit_type", "energy_audit")
 
     if not property_id:
         return jsonify({"error": "Missing property_id"}), 400
 
     try:
-        new_audit = Audit(property_id=property_id)
+        new_audit = Audit(property_id=property_id, audit_type=audit_type)
         db.session.add(new_audit)
         db.session.commit()
 
         return jsonify({
             "id": new_audit.id,
             "property_id": new_audit.property_id,
+            "audit_type": new_audit.audit_type,
             "date": new_audit.date.isoformat()
         }), 201
     except Exception as e:
@@ -90,6 +91,7 @@ def get_audit(audit_id):
         "date": audit.date.strftime('%Y-%m-%d'),
         "auditor_name": audit.auditor_name,
         "notes": audit.notes,
+        "audit_type": audit.audit_type,
         "steps": [
             {
                 "id": step.id,
@@ -109,6 +111,7 @@ def get_audit_by_property(property_id):
         return jsonify({
             "id": audit.id,
             "property_id": audit.property_id,
+            "audit_type": audit.audit_type,
             "date": audit.date.isoformat()
         })
     else:

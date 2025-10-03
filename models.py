@@ -13,6 +13,7 @@ class Property(db.Model):
     zip_code = db.Column(db.String)
     year_built = db.Column(db.Integer)
     sqft = db.Column(db.Integer, nullable=True)
+    property_type = db.Column(db.String, nullable=False)
 
     # Relationships
     audits = relationship('Audit', back_populates='property', cascade="all, delete-orphan")
@@ -26,6 +27,7 @@ class Audit(db.Model):
     auditor_name = db.Column(db.String, nullable=True)
     notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    audit_type = db.Column(db.String(50), nullable=False, default="energy_audit")  # values: "energy_audit", "home_inspection_energy_audit"
 
     # Relationships
     property = relationship('Property', back_populates='audits')
