@@ -4,42 +4,48 @@ import json
 
 bp = Blueprint("steps", __name__)
 
+# --- Helper to parse notes safely ---
+def parse_notes(notes):
+    if not notes:
+        return {}
+    if isinstance(notes, dict):
+        return notes
+    try:
+        return json.loads(notes)
+    except Exception:
+        return {"raw": notes}  # fallback
+
+def serialize_step(step):
+    notes_data = parse_notes(step.notes)
+
+    # Only expose orientation/siding/rooms for exterior steps
+    return {
+        "id": step.id,
+        "label": step.label,
+        "step_type": step.step_type,
+        "status": step.status,
+        "orientation": notes_data.get("orientation") if step.step_type == "exterior" else None,
+        "siding_material": notes_data.get("siding_material") if step.step_type == "exterior" else None,
+        "rooms": notes_data.get("rooms") if step.step_type == "exterior" else None,
+        "notes": notes_data,  # still return all notes for flexibility
+        "media": [
+            {
+                "id": m.id,
+                "media_url": m.media_url,
+                "file_name": m.file_name,
+                "media_type": m.media_type,
+                "summary": m.summary,
+                "created_at": m.created_at.isoformat()
+            }
+            for m in AuditMedia.query.filter_by(step_id=step.id).all()
+        ],
+    }
+
 # --- Get all steps for an audit ---
 @bp.route('/audits/<int:audit_id>/steps', methods=['GET'])
 def get_audit_steps(audit_id):
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
-    result = []
-
-    for step in steps:
-        # Fetch media linked to this step
-        media_items = AuditMedia.query.filter_by(step_id=step.id).all()
-        media = [{
-            "id": m.id,
-            "media_url": m.media_url,
-            "file_name": m.file_name,
-            "media_type": m.media_type,
-            "summary": m.summary,
-            "created_at": m.created_at.isoformat()
-        } for m in media_items]
-
-        # Parse notes JSON if possible
-        notes_parsed = None
-        if step.notes:
-            try:
-                notes_parsed = json.loads(step.notes)
-            except Exception:
-                notes_parsed = step.notes  # fallback to raw string
-
-        result.append({
-            "id": step.id,
-            "label": step.label,
-            "step_type": step.step_type,
-            "status": step.status,   # ✅ new unified status field
-            "notes": notes_parsed,
-            "media": media
-        })
-
-    return jsonify(result)
+    return jsonify([serialize_step(s) for s in steps])
 
 
 # --- Create or update an audit step ---
@@ -48,37 +54,45 @@ def create_or_update_audit_step(audit_id):
     data = request.get_json()
     step_type = data.get('step_type')
     label = data.get('label')
-    status = data.get('status')  # Expect one of: Not Started, Processing, Completed, Error, Not Accessible
-    notes = data.get('notes')
+    status = data.get('status')  # Not Started, Processing, Completed, Error, Not Accessible
 
     if not step_type or not label:
         return jsonify({'error': 'Missing step_type or label'}), 400
 
-    # Serialize notes if dict
-    notes_str = json.dumps(notes) if isinstance(notes, dict) else notes
-
     # Check if step exists
-    existing_step = AuditStep.query.filter_by(
-        audit_id=audit_id,
-        step_type=step_type,
-        label=label
-    ).first()
+    step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
 
-    if existing_step:
+    # Parse current notes if step exists
+    notes_data = parse_notes(step.notes if step else {})
+
+    # Update exterior-specific fields if provided
+    if step_type == "exterior":
+        if "orientation" in data:
+            notes_data["orientation"] = data.get("orientation")
+        if "siding_material" in data:
+            notes_data["siding_material"] = data.get("siding_material")
+        if "rooms" in data:
+            notes_data["rooms"] = data.get("rooms", [])
+
+    # Merge in any generic notes
+    if "notes" in data and isinstance(data["notes"], dict):
+        notes_data.update(data["notes"])
+
+    notes_str = json.dumps(notes_data)
+
+    if step:
         if status:
-            existing_step.status = status
-        if notes is not None:
-            existing_step.notes = notes_str
-
+            step.status = status
+        step.notes = notes_str
         db.session.commit()
-        return jsonify({"message": "Step updated", "id": existing_step.id}), 200
+        return jsonify({"message": "Step updated", "id": step.id}), 200
     else:
         new_step = AuditStep(
             audit_id=audit_id,
             step_type=step_type,
             label=label,
             status=status if status else "Not Started",
-            notes=notes_str
+            notes=notes_str,
         )
         db.session.add(new_step)
         db.session.commit()
@@ -101,31 +115,7 @@ def get_media_by_step_label(audit_id, step_label):
             "media_type": m.media_type,
             "summary": m.summary,
             "created_at": m.created_at.isoformat(),
-            "status": step.status  # ✅ return step status along with media
-        } for m in media_items
+            "status": step.status,
+        }
+        for m in media_items
     ])
-
-@bp.route("/media/<int:media_id>", methods=["DELETE"])
-def delete_media(media_id):
-    """
-    Delete an AuditMedia record (and optionally remove from Supabase).
-    """
-    try:
-        media = AuditMedia.query.get(media_id)
-        if not media:
-            return jsonify({"error": "Media not found"}), 404
-
-        # Optional: also remove from Supabase storage if you want
-        # Example (uncomment if desired):
-        # try:
-        #     supabase.storage.from_(SUPABASE_BUCKET_NAME).remove([media.file_name])
-        # except Exception as e:
-        #     print(f"⚠️ Failed to delete from Supabase: {e}")
-
-        db.session.delete(media)
-        db.session.commit()
-        return jsonify({"success": True, "id": media_id}), 200
-
-    except Exception as e:
-        print(f"❌ Delete media failed: {e}")
-        return jsonify({"error": "Delete failed", "details": str(e)}), 500
