@@ -191,11 +191,21 @@ def handle_interview(audit_id):
     if all_summaries:
         try:
             combined_prompt = (
-                "You are an energy auditor assistant. You will be given multiple interview recording transcriptions. "
-                "Synthesize them into a single unified homeowner interview summary:\n"
-                "- Comfort issues (rooms, time of day, seasonal)\n"
-                "- Remodeling/upgrade plans (HVAC, water heater, EV, etc.)\n"
-                "- Concise narrative for an energy audit report.\n"
+                """
+You are an energy auditor assistant. You will be given multiple homeowner interview transcripts. 
+Your job is to create a concise, professional summary suitable for an audit report.
+
+Rules:
+- ONLY include issues, plans, or upgrades explicitly mentioned in the transcripts. 
+- If a category is not mentioned, say "No information provided."
+- Do NOT infer or assume details that are not stated.
+- Keep the output plain text in narrative form, no bullet points.
+
+Focus on:
+1. Comfort issues (hot/cold rooms, seasonal patterns, times of day).
+2. Remodeling/upgrade plans (HVAC, insulation, water heater, EV, etc.).
+
+"""
             )
             combined_resp = client.chat.completions.create(
                 model="gpt-4o",

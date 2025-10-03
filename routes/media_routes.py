@@ -1,5 +1,4 @@
 # routes/media.py
-import shutil
 import os
 import base64
 import tempfile
@@ -21,8 +20,6 @@ bp = Blueprint("media", __name__)
 # Config / Clients
 # -------------------------
 MAX_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB threshold for compression
-FRAME_FPS = 0.2
-MAX_FRAMES = 6
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -57,7 +54,7 @@ def _upload_to_supabase_bytes(path_in_bucket: str, data: bytes, content_type: st
             file_options={"content-type": content_type}
         )
     except Exception as e:
-        if "409" in str(e):
+        if "409" in str(e):  # file exists → update
             supabase.storage.from_(SUPABASE_BUCKET_NAME).update(
                 path=path_in_bucket,
                 file=data,
@@ -75,24 +72,28 @@ def safe_parse(s: str):
 # -------------------------
 # Media Processing Worker
 # -------------------------
-def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str, orientation: str = None):
+def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
     with app.app_context():
-        try:
-            media = AuditMedia.query.get(media_id)
-            step = AuditStep.query.get(media.step_id) if media else None
-            step_type = media.step_type if media else "exterior"
+        media = AuditMedia.query.get(media_id)
+        step = AuditStep.query.get(media.step_id) if media else None
+        if not step:
+            print("❌ [process_media_async] No step found for media_id", media_id)
+            return
 
-            # Load raw bytes
+        try:
+            # Prepare context
             if media_type in ["photo", "video"]:
                 with open(local_path, "rb") as f:
-                    content = base64.b64encode(f.read()).decode("utf-8")
+                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                context = {"type": "image", "b64": img_b64}
             elif media_type == "audio":
                 with open(local_path, "rb") as f:
                     transcript = client.audio.transcriptions.create(
                         model="whisper-1",
                         file=f
                     ).text
-                content = {"type": "audio", "transcript": transcript}
+                media.notes = transcript
+                context = {"type": "audio", "transcript": transcript}
             else:
                 raise ValueError("Unsupported media type")
 
@@ -103,41 +104,28 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 "insulation": InsulationSchema,
                 "interview": InterviewSchema,
             }
-            schema_cls = schema_map.get(step_type, None)
+            schema_cls = schema_map.get(step.step_type)
             if not schema_cls:
-                raise ValueError(f"No schema for step_type={step_type}")
+                raise ValueError(f"No schema for step_type={step.step_type}")
 
-            with open(local_path, "rb") as f:
-                img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-            if media_type in ["photo", "video"]:
-                with open(local_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                context = {"type": "image", "b64": img_b64}
-            elif media_type == "audio":
-                context = {"type": "audio", "transcript": transcript}
-
+            # Run agent
             parsed = run_agent(
-                domain=step_type,
+                domain=step.step_type,
                 context=context,
                 audit_id=media.audit_id,
                 mode="media",
             )
-            media.summary = json.dumps(parsed, indent=2)
-            db.session.commit()
 
-            if step:
-                step.status = "Completed"
-                db.session.commit()
+            # Save structured output to step
+            step.ai_summary = parsed
+            step.status = "Completed"
+            db.session.commit()
 
         except Exception as e:
             print(f"❌ [process_media_async] Failed: {e}")
-            media = AuditMedia.query.get(media_id)
-            if media:
-                media.summary = f"Error: {e}"
-                db.session.commit()
             if step:
                 step.status = "Error"
+                step.ai_summary = {"error": str(e)}
                 db.session.commit()
 
 # -------------------------
@@ -154,12 +142,16 @@ def upload_media_by_step_label(audit_id, step_label):
 
     step_type = request.form.get('step_type', 'exterior')
     media_type = request.form.get('media_type', 'photo')
-    audit_media_name = request.form.get('audit_media_name')
 
     # Find/create step
     step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
     if not step:
-        step = AuditStep(audit_id=audit_id, label=step_label, step_type=step_type, status="Processing")
+        step = AuditStep(
+            audit_id=audit_id,
+            label=step_label,
+            step_type=step_type,
+            status="Processing"
+        )
         db.session.add(step)
         db.session.commit()
     else:
@@ -167,6 +159,7 @@ def upload_media_by_step_label(audit_id, step_label):
         db.session.commit()
 
     try:
+        # Save temp file
         tmp_path = os.path.join(tempfile.gettempdir(), filename)
         with open(tmp_path, "wb") as f:
             f.write(file_bytes)
@@ -188,38 +181,35 @@ def upload_media_by_step_label(audit_id, step_label):
         _upload_to_supabase_bytes(filename, data, content_type)
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
 
+        # Save AuditMedia row
         media_row = AuditMedia(
             audit_id=audit_id,
             step_id=step.id,
-            step_type=step.step_type,
-            side=step.label,
             media_url=public_url,
             file_name=file.filename,
             media_type=media_type,
-            audit_media_name=audit_media_name,
-            summary="Processing…"
+            notes="Processing…" if media_type != "audio" else None
         )
         db.session.add(media_row)
         db.session.commit()
 
-        orientation = step_label if step_type == "exterior" else None
+        # Spawn async processing
         Thread(
             target=process_media_async,
-            args=(current_app._get_current_object(), media_row.id, upload_local_path, public_url, media_type, orientation)
+            args=(current_app._get_current_object(), media_row.id, upload_local_path, public_url, media_type)
         ).start()
 
         return jsonify({
             "id": media_row.id,
             "media_url": public_url,
-            "summary": media_row.summary,
-            "status": step.status,
-            "audit_media_name": media_row.audit_media_name
+            "status": step.status
         }), 201
 
     except Exception as e:
         step.status = "Error"
         db.session.commit()
         return jsonify({'error': 'Upload failed', 'details': str(e)}), 500
+
 
 @bp.route('/steps/<int:step_id>/media', methods=['GET'])
 def get_step_media(step_id):
@@ -228,13 +218,9 @@ def get_step_media(step_id):
         "id": m.id,
         "audit_id": m.audit_id,
         "step_id": m.step_id,
-        "step_type": m.step_type,
-        "side": m.side,
         "media_url": m.media_url,
         "file_name": m.file_name,
         "media_type": m.media_type,
-        "audit_media_name": m.audit_media_name,
-        "summary": safe_parse(m.summary),
-        "structured": m.structured,
+        "notes": m.notes,
         "created_at": m.created_at.isoformat()
     } for m in media])
