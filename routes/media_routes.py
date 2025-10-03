@@ -218,9 +218,16 @@ def get_step_media(step_id):
         "id": m.id,
         "audit_id": m.audit_id,
         "step_id": m.step_id,
+        "step_type": m.step_type,
+        "side": m.side,
         "media_url": m.media_url,
         "file_name": m.file_name,
         "media_type": m.media_type,
-        "notes": m.notes,
-        "created_at": m.created_at.isoformat()
+        "audit_media_name": m.audit_media_name,
+        "summary": safe_parse(m.summary),
+        "structured": m.structured,
+        "created_at": m.created_at.isoformat(),
+        # 👇 add this
+        "short_label": " ".join(m.notes.split()[:5]) + ("…" if m.notes and len(m.notes.split()) > 5 else "")
+                      if m.notes else m.file_name
     } for m in media])
