@@ -231,3 +231,38 @@ def get_step_media(step_id):
         "short_label": " ".join(m.notes.split()[:5]) + ("…" if m.notes and len(m.notes.split()) > 5 else "")
                       if m.notes else m.file_name
     } for m in media])
+
+@bp.route('/media/<int:media_id>', methods=['DELETE'])
+def delete_media(media_id):
+    media = AuditMedia.query.get(media_id)
+    if not media:
+        return jsonify({"error": "Media not found"}), 404
+
+    try:
+        step = AuditStep.query.get(media.step_id)
+
+        # Try to delete from Supabase bucket
+        try:
+            if media.media_url:
+                path_in_bucket = os.path.basename(media.media_url)
+                supabase.storage.from_(SUPABASE_BUCKET_NAME).remove([path_in_bucket])
+        except Exception as e:
+            print(f"⚠️ [media] Failed to delete from Supabase: {e}")
+
+        # Delete DB row
+        db.session.delete(media)
+        db.session.commit()
+
+        # After commit, check if step still has media
+        if step:
+            remaining = AuditMedia.query.filter_by(step_id=step.id).count()
+            if remaining == 0:
+                step.status = "Not Started"
+                step.summary = None
+                db.session.commit()
+
+        return jsonify({"message": "Media deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to delete media: {e}"}), 500
