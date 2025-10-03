@@ -52,20 +52,56 @@ def get_audit_steps(audit_id):
 @bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
     data = request.get_json()
-    step_type = data.get('step_type')
-    label = data.get('label')
-    status = data.get('status')  # Not Started, Processing, Completed, Error, Not Accessible
+    step_id = data.get("id")  # ✅ new: explicit step id
+    step_type = data.get("step_type")
+    label = data.get("label")
+    status = data.get("status")  # Not Started, Processing, Completed, Error, Not Accessible
 
-    if not step_type or not label:
+    # Require step_type for new steps, but allow updating by id
+    if not step_id and (not step_type or not label):
         return jsonify({'error': 'Missing step_type or label'}), 400
 
-    # Check if step exists
-    step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
+    # --- Update existing step if id provided ---
+    if step_id:
+        step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
+        if not step:
+            return jsonify({'error': 'Step not found'}), 404
 
-    # Parse current notes if step exists
+        notes_data = parse_notes(step.notes)
+
+        if step.step_type == "exterior":
+            if "orientation" in data:
+                notes_data["orientation"] = data.get("orientation")
+                # also update label to match orientation if provided
+                step.label = data.get("orientation")
+            if "siding_material" in data:
+                notes_data["siding_material"] = data.get("siding_material")
+            if "rooms" in data:
+                notes_data["rooms"] = data.get("rooms", [])
+
+        if "notes" in data and isinstance(data["notes"], dict):
+            notes_data.update(data["notes"])
+
+        if "label" in data and not data.get("orientation"):
+            # Allow manual label override if no orientation is passed
+            step.label = data["label"]
+
+        if "status" in data:
+            step.status = status
+
+        step.notes = json.dumps(notes_data)
+        db.session.commit()
+        return jsonify({"message": "Step updated", "id": step.id}), 200
+
+    # --- Otherwise: create or update based on audit_id + step_type + label ---
+    step = AuditStep.query.filter_by(
+        audit_id=audit_id,
+        step_type=step_type,
+        label=label
+    ).first()
+
     notes_data = parse_notes(step.notes if step else {})
 
-    # Update exterior-specific fields if provided
     if step_type == "exterior":
         if "orientation" in data:
             notes_data["orientation"] = data.get("orientation")
@@ -74,7 +110,6 @@ def create_or_update_audit_step(audit_id):
         if "rooms" in data:
             notes_data["rooms"] = data.get("rooms", [])
 
-    # Merge in any generic notes
     if "notes" in data and isinstance(data["notes"], dict):
         notes_data.update(data["notes"])
 
