@@ -1,12 +1,14 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
-from sqlalchemy.dialects.postgresql import JSONB   # ✅ import JSONB
+from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
 
 db = SQLAlchemy()
 
+
 class Property(db.Model):
     __tablename__ = 'properties'
+
     id = db.Column(db.Integer, primary_key=True)
     street = db.Column(db.String)
     city = db.Column(db.String)
@@ -17,65 +19,66 @@ class Property(db.Model):
     property_type = db.Column(db.String, nullable=False)
 
     # Relationships
-    audits = relationship('Audit', back_populates='property', cascade="all, delete-orphan")
+    audits = relationship("Audit", back_populates="property", cascade="all, delete-orphan")
 
 
 class Audit(db.Model):
     __tablename__ = 'audits'
+
     id = db.Column(db.Integer, primary_key=True)
-    property_id = db.Column(db.Integer, db.ForeignKey('properties.id', ondelete='CASCADE'), nullable=False)
+    property_id = db.Column(db.Integer, db.ForeignKey('properties.id', ondelete="CASCADE"), nullable=False)
     date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
     auditor_name = db.Column(db.String, nullable=True)
     notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    audit_type = db.Column(db.String(50), nullable=False, default="energy_audit")  # values: "energy_audit", "home_inspection_energy_audit"
+    audit_type = db.Column(db.String(50), nullable=False, default="energy_audit")  
+    # values: "energy_audit", "home_inspection_energy_audit"
 
     # Relationships
-    property = relationship('Property', back_populates='audits')
-    steps = relationship('AuditStep', back_populates='audit', cascade="all, delete-orphan")
-    media = relationship('AuditMedia', back_populates='audit', cascade="all, delete-orphan")
-    recommendations = relationship('AuditRecommendation', back_populates='audit', cascade="all, delete-orphan")
-
-
+    property = relationship("Property", back_populates="audits")
+    steps = relationship("AuditStep", back_populates="audit", cascade="all, delete-orphan")
+    media = relationship("AuditMedia", back_populates="audit", cascade="all, delete-orphan")
+    recommendations = relationship("AuditRecommendation", back_populates="audit", cascade="all, delete-orphan")
 class AuditStep(db.Model):
     __tablename__ = "audit_steps"
 
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String, nullable=False)
     label = db.Column(db.String, nullable=False)
     status = db.Column(db.String, default="Not Started")
 
-    # Replaces `notes`
-    meta = db.Column(JSONB, default={})
-
-    # New fields
-    summary = db.Column(db.Text, nullable=True)       # Freeform text
-    ai_summary = db.Column(JSONB, default={})         # Structured AI output
+    meta = db.Column(JSONB, default=dict)
+    summary = db.Column(db.Text, nullable=True)
+    ai_summary = db.Column(JSONB, default=dict)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    media = db.relationship("AuditMedia", backref="step", cascade="all, delete-orphan")
+    # ✅ must match Audit.steps
+    audit = relationship("Audit", back_populates="steps")
+    # ✅ must match AuditMedia.step
+    media = relationship("AuditMedia", back_populates="step", cascade="all, delete-orphan")
 
 
 class AuditMedia(db.Model):
     __tablename__ = "audit_media"
 
     id = db.Column(db.Integer, primary_key=True)
-    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id"), nullable=False)
-    step_id = db.Column(db.Integer, db.ForeignKey("audit_steps.id"), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    step_id = db.Column(db.Integer, db.ForeignKey("audit_steps.id", ondelete="CASCADE"), nullable=False)
 
     media_url = db.Column(db.String, nullable=False)
     file_name = db.Column(db.String, nullable=False)
     media_type = db.Column(db.String, nullable=False)
-    notes = db.Column(db.String, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships
-    audit = relationship('Audit', back_populates='media')
-    step = relationship('AuditStep', back_populates='media')
+    # ✅ must match Audit.media
+    audit = relationship("Audit", back_populates="media")
+    # ✅ must match AuditStep.media
+    step = relationship("AuditStep", back_populates="media")
 
 
 class AgentConversation(db.Model):
@@ -83,8 +86,8 @@ class AgentConversation(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     audit_id = db.Column(db.Integer, nullable=False)
-    domain = db.Column(db.String, nullable=False)
-    role = db.Column(db.String, nullable=False)   # system, user, assistant
+    domain = db.Column(db.String, nullable=False)   # insulation, hvac, exterior, interview
+    role = db.Column(db.String, nullable=False)     # system, user, assistant
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -102,6 +105,7 @@ class AuditRecommendation(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     audit = relationship("Audit", back_populates="recommendations")
+
 
 class Contractor(db.Model):
     __tablename__ = "contractors"

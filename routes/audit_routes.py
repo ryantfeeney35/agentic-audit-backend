@@ -7,7 +7,6 @@ import os
 import tempfile
 import fitz  # PyMuPDF
 import base64
-import json
 
 bp = Blueprint("audits", __name__)
 
@@ -16,11 +15,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Helper: Extract usage from bill ---
 def summarize_bill_from_pdf(pdf_path: str) -> str:
-    """
-    Render the bill chart as an image and send it to GPT for a natural language summary.
-    """
+    """Render the bill chart as an image and send it to GPT for a natural language summary."""
     doc = fitz.open(pdf_path)
-    page = doc[0]  # ⚠️ adjust if the usage chart is on another page
+    page = doc[0]  # ⚠️ adjust if usage chart on another page
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     img_bytes = pix.tobytes("png")
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
@@ -33,10 +30,10 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
     - Total annual kWh usage
     - Seasonal or monthly trends (peak vs. low months)
     - Any notable patterns (summer peaks, winter lows, unusual fluctuations)
-    - Breakdown of usage by Time-of-Use (on-peak, off-peak, super off-peak) if visible
-    - Practical insights a homeowner or auditor would find useful (e.g. opportunities for savings)
+    - Breakdown of usage by Time-of-Use (if visible)
+    - Practical insights a homeowner or auditor would find useful
 
-    Keep it short and in plain text (no JSON, no lists, just a narrative).
+    Keep it short and in plain text.
     """
 
     resp = client.chat.completions.create(
@@ -52,6 +49,7 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
     )
 
     return resp.choices[0].message.content.strip()
+
 
 # --- Routes ---
 @bp.route('/audits', methods=['POST'])
@@ -97,7 +95,8 @@ def get_audit(audit_id):
                 "id": step.id,
                 "step_type": step.step_type,
                 "label": step.label,
-                "status": step.status
+                "status": step.status,
+                "summary": step.summary
             }
             for step in audit.steps
         ]
@@ -130,7 +129,11 @@ def handle_interview(audit_id):
         temp_path = tmp.name
 
     # --- Step 1: Ensure interview step exists ---
-    step = AuditStep.query.filter_by(audit_id=audit_id, step_type="interview", label="Initial Interview").first()
+    step = AuditStep.query.filter_by(
+        audit_id=audit_id,
+        step_type="interview",
+        label="Initial Interview"
+    ).first()
     if not step:
         step = AuditStep(
             audit_id=audit_id,
@@ -153,7 +156,7 @@ def handle_interview(audit_id):
         os.remove(temp_path)
         return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
 
-    # --- Step 4: Upload audio ---
+    # --- Step 3: Upload audio ---
     try:
         file_url = upload_to_supabase_and_get_url(
             file_path=temp_path,
@@ -165,20 +168,24 @@ def handle_interview(audit_id):
     finally:
         os.remove(temp_path)
 
-    # --- Step 5: Save media row ---
+    # --- Step 4: Save media row ---
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
         file_name=secure_filename(file.filename),
         media_type="audio",
         media_url=file_url,
-        notes=transcript,
+        notes=transcript  # raw transcript stored in notes
     )
     db.session.add(media)
     db.session.commit()
 
-    # --- Step 6: Collect ALL interview recordings and re-summarize ---
-    all_media = AuditMedia.query.filter_by(audit_id=audit_id, step_id=step.id, media_type="audio").all()
+    # --- Step 5: Collect ALL interview recordings and re-summarize ---
+    all_media = AuditMedia.query.filter_by(
+        audit_id=audit_id,
+        step_id=step.id,
+        media_type="audio"
+    ).all()
     all_summaries = [m.notes for m in all_media if m.notes]
 
     if all_summaries:
@@ -186,9 +193,9 @@ def handle_interview(audit_id):
             combined_prompt = (
                 "You are an energy auditor assistant. You will be given multiple interview recording transcriptions. "
                 "Synthesize them into a single unified homeowner interview summary:\n"
-                "- Capture comfort issues (hot/cold rooms, time of day, seasonal patterns)\n"
-                "- Capture remodeling/upgrade plans (HVAC, water heater, EV, etc.)\n"
-                "- Provide a professional, concise narrative suitable for an energy audit report.\n"
+                "- Comfort issues (rooms, time of day, seasonal)\n"
+                "- Remodeling/upgrade plans (HVAC, water heater, EV, etc.)\n"
+                "- Concise narrative for an energy audit report.\n"
             )
             combined_resp = client.chat.completions.create(
                 model="gpt-4o",
@@ -198,21 +205,20 @@ def handle_interview(audit_id):
                 ]
             )
             combined_summary = combined_resp.choices[0].message.content.strip()
-        except Exception as e:
+        except Exception:
             combined_summary = "\n".join(all_summaries)
 
-        # Save to step summary
+        # Save combined summary to step
         step.summary = combined_summary
         step.status = "Completed"
         db.session.commit()
 
-    # ✅ Generate first 5 words of transcript for display
     short_label = " ".join(transcript.split()[:5]) + ("…" if len(transcript.split()) > 5 else "")
 
     return jsonify({
         "transcript": transcript,
         "media_url": file_url,
-        "short_label": short_label,  # 👈 new field
+        "short_label": short_label,
         "step_id": step.id,
         "media_id": media.id,
         "summary": step.summary
@@ -252,25 +258,25 @@ def handle_utility_bill(audit_id):
     finally:
         os.remove(temp_path)
 
-    # Step 3: Save new AuditStep + AuditMedia
+    # Step 3: Save AuditStep
     step = AuditStep(
         audit_id=audit_id,
         step_type='interview',
         label='Utility Bill',
-        notes="Utility bill uploaded",
-        status="Completed",  # new status column
+        status="Completed",
+        summary=summary
     )
     db.session.add(step)
     db.session.commit()
 
+    # Step 4: Save AuditMedia
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
-        step_type='interview',
         file_name=secure_filename(file.filename),
         media_type='document',
         media_url=file_url,
-        summary=summary  # ✅ plain text summary
+        notes="Utility bill uploaded"
     )
     db.session.add(media)
     db.session.commit()
