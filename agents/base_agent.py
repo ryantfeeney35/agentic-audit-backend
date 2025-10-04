@@ -1,7 +1,15 @@
 import logging
+import base64
+import json
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
-from .schemas import AgentOutput
+from .schemas import (
+    AgentOutput,
+    ExteriorSidingSchema,
+    HVACSchema,
+    InsulationSchema,
+    InterviewSchema,
+)
 from models import AgentConversation, db
 
 logger = logging.getLogger(__name__)
@@ -9,13 +17,21 @@ logging.basicConfig(level=logging.DEBUG)
 
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
+# Map domains to media schemas
+MEDIA_SCHEMAS = {
+    "exterior": ExteriorSidingSchema,
+    "hvac": HVACSchema,
+    "insulation": InsulationSchema,
+    "interview": InterviewSchema,
+}
+
 
 def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
     """Wrapper around llm.invoke that logs inputs + outputs clearly."""
     try:
         logger.debug("=== [%s] Sending to LLM ===", domain)
         for msg in messages:
-            logger.debug("[%s] %s", msg["role"], msg["content"][:500])
+            logger.debug("[%s] %s", msg["role"], str(msg["content"])[:500])
         resp = llm.invoke(messages)
         logger.debug("=== [%s] LLM Response ===", domain)
         logger.debug(resp.content)
@@ -27,95 +43,164 @@ def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
 
 def run_agent(
     domain: str,
-    context: str,
+    context: str | dict,
     bootstrap: bool = False,
     audit_id: int | None = None,
-    mode: str = "followup",   # 🔑 new param: "bootstrap" | "followup" | "recommendations"
-) -> AgentOutput:
-    """
-    Run a domain-specific agent (insulation, siding, hvac) with structured output.
-    mode:
-      - "bootstrap": initial run (summary + follow-up questions)
-      - "followup": only new follow-up questions
-      - "recommendations": generate upgrade recs with ROI
-    """
+    mode: str = "followup",  # "bootstrap" | "followup" | "recommendations" | "media"
+) -> dict:
+    # Pick parser based on mode/domain
+    if mode == "media" and domain in MEDIA_SCHEMAS:
+        parser = PydanticOutputParser(pydantic_object=MEDIA_SCHEMAS[domain])
+    else:
+        parser = PydanticOutputParser(pydantic_object=AgentOutput)
 
-    parser = PydanticOutputParser(pydantic_object=AgentOutput)
-
-    # === System instructions ===
-    if mode == "bootstrap":
+    # -------------------------
+    # System instructions
+    # -------------------------
+    if mode == "media":
+        if domain == "insulation":
+            system_instructions = (
+                "You are the Insulation Agent (CREIA protocol).\n"
+                "- Identify insulation type, depth, and condition\n"
+                "- Flag gaps/thermal breaks, attic cover, recessed lights\n"
+                "- Return structured JSON using the InsulationMediaOutput schema."
+            )
+        elif domain == "hvac":
+            system_instructions = (
+                "You are the HVAC Agent (CREIA protocol).\n"
+                "- Identify system type, brand/model, efficiency ratings\n"
+                "- Assess ducting (sealing, insulation, asbestos tape)\n"
+                "- Flag safety/efficiency issues\n"
+                "- Return structured JSON using the HVACMediaOutput schema."
+            )
+        else:  # exterior
+            system_instructions = (
+                "You are the Exterior Agent (CREIA protocol).\n"
+                "- Detect orientation (if possible)\n"
+                "- Note shading and glass–wall ratio\n"
+                "- Identify siding type\n"
+                "- Highlight comfort/efficiency impacts\n"
+                "- Return structured JSON using the ExteriorMediaOutput schema."
+            )
+    elif mode == "bootstrap":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Review provided context carefully.\n"
-            "- You MUST always return valid JSON conforming to the schema.\n"
-            "- Fill BOTH fields:\n"
-            "   • `summary`: 1–3 sentences of findings.\n"
-            "   • `followup_questions`: a list of missing details (e.g., R-values, SEER/HSPF, duct insulation).\n"
-            "- If nothing missing, set `followup_questions` to [].\n"
-            "- Do NOT generate upgrade recommendations yet.\n"
+            "- Always return JSON conforming to AgentOutput.\n"
+            "- Fill BOTH `summary` and `followup_questions`."
         )
     elif mode == "recommendations":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Review the context carefully.\n"
-            "- You MUST always return valid JSON that conforms exactly to the schema.\n"
-            "- Populate ONLY the `recommendations` field. Leave `summary` as null and `followup_questions` as [].\n"
-            "- Each recommendation object must include:\n"
-            "   • `step_type`: MUST be one of ['exterior', 'hvac', 'insulation']\n"
-            "   • summary (string)\n"
-            "   • annual_savings_usd (number)\n"
-            "   • upgrade_cost_usd (number)\n"
-            "   • payback_years (number or null)\n"
-            "- If no upgrades apply, return `recommendations: []`.\n"
+            "- Always return JSON conforming to AgentOutput.\n"
+            "- Populate ONLY `recommendations`."
         )
     else:  # followup
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- You MUST always return valid JSON conforming to the schema.\n"
-            "- Do NOT summarize.\n"
-            "- ONLY output NEW `followup_questions`.\n"
-            "- If no further questions, return [].\n"
+            "- Always return JSON conforming to AgentOutput.\n"
+            "- Only output `followup_questions`."
         )
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 
-    messages = [
-        {"role": "system", "content": system_message},
-        {"role": "user", "content": context},
-    ]
+    # -------------------------
+    # Build user messages based on context type
+    # -------------------------
+    messages = [{"role": "system", "content": system_message}]
 
-    logger.info("➡️ Running %s agent (mode=%s, ctx_len=%d)", domain, mode, len(context))
-    logger.debug("=== %s Context Preview ===\n%s", domain, context[:1000])
+    if isinstance(context, dict):
+        # 🎨 Handle single image
+        if context.get("type") == "image" and "b64" in context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{context['b64']}"
+                            },
+                        }
+                    ],
+                }
+            )
 
+        # 🖼️ Handle batch of images (multiple photos/videos)
+        elif context.get("type") == "image_batch" and "images" in context:
+            content_items = []
+            for img in context["images"]:
+                b64 = img.get("b64")
+                fname = img.get("file_name", "photo.jpg")
+                if not b64:
+                    continue
+                content_items.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}",
+                            "detail": "high",
+                        },
+                    }
+                )
+                # add text labels for traceability
+                content_items.append({"type": "text", "text": f"Image: {fname}"})
+            messages.append({"role": "user", "content": content_items})
+
+        # 🔊 Handle audio
+        elif context.get("type") == "audio":
+            transcript = context.get("transcript", "")
+            messages.append({"role": "user", "content": transcript})
+
+        else:
+            messages.append({"role": "user", "content": json.dumps(context)})
+
+    else:
+        # Default: plain text
+        messages.append({"role": "user", "content": str(context)})
+
+    # -------------------------
+    # Invoke the model
+    # -------------------------
     resp_text = run_orchestrator_chat(messages, domain)
 
-    # ✅ Persist conversation
+    # -------------------------
+    # Persist conversation (only for interactive modes)
+    # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        db.session.add(AgentConversation(
-            audit_id=audit_id,
-            domain=domain,
-            role="system",
-            content=system_message,
-        ))
-        db.session.add(AgentConversation(
-            audit_id=audit_id,
-            domain=domain,
-            role="user",
-            content=context,
-        ))
-        db.session.add(AgentConversation(
-            audit_id=audit_id,
-            domain=domain,
-            role="assistant",
-            content=resp_text,
-        ))
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id, domain=domain, role="system", content=system_message
+            )
+        )
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id,
+                domain=domain,
+                role="user",
+                content=str(context)[:2000],
+            )
+        )
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id,
+                domain=domain,
+                role="assistant",
+                content=resp_text,
+            )
+        )
         db.session.commit()
 
-    # ✅ Robust parsing
+    # -------------------------
+    # Parse response
+    # -------------------------
     try:
         parsed = parser.parse(resp_text)
+        return parsed.model_dump()
     except Exception as e:
         logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)
-        parsed = AgentOutput(summary="", followup_questions=[], recommendations=[])
-
-    return parsed
+        return {
+            "summary": "",
+            "followup_questions": [],
+            "recommendations": [],
+            "error": str(e),
+        }

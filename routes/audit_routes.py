@@ -7,7 +7,6 @@ import os
 import tempfile
 import fitz  # PyMuPDF
 import base64
-import json
 
 bp = Blueprint("audits", __name__)
 
@@ -16,11 +15,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Helper: Extract usage from bill ---
 def summarize_bill_from_pdf(pdf_path: str) -> str:
-    """
-    Render the bill chart as an image and send it to GPT for a natural language summary.
-    """
+    """Render the bill chart as an image and send it to GPT for a natural language summary."""
     doc = fitz.open(pdf_path)
-    page = doc[0]  # ⚠️ adjust if the usage chart is on another page
+    page = doc[0]  # ⚠️ adjust if usage chart on another page
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     img_bytes = pix.tobytes("png")
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
@@ -33,10 +30,10 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
     - Total annual kWh usage
     - Seasonal or monthly trends (peak vs. low months)
     - Any notable patterns (summer peaks, winter lows, unusual fluctuations)
-    - Breakdown of usage by Time-of-Use (on-peak, off-peak, super off-peak) if visible
-    - Practical insights a homeowner or auditor would find useful (e.g. opportunities for savings)
+    - Breakdown of usage by Time-of-Use (if visible)
+    - Practical insights a homeowner or auditor would find useful
 
-    Keep it short and in plain text (no JSON, no lists, just a narrative).
+    Keep it short and in plain text.
     """
 
     resp = client.chat.completions.create(
@@ -53,24 +50,26 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
 
     return resp.choices[0].message.content.strip()
 
-# --- Routes ---
 
+# --- Routes ---
 @bp.route('/audits', methods=['POST'])
 def create_audit():
     data = request.get_json()
     property_id = data.get("property_id")
+    audit_type = data.get("audit_type", "energy_audit")
 
     if not property_id:
         return jsonify({"error": "Missing property_id"}), 400
 
     try:
-        new_audit = Audit(property_id=property_id)
+        new_audit = Audit(property_id=property_id, audit_type=audit_type)
         db.session.add(new_audit)
         db.session.commit()
 
         return jsonify({
             "id": new_audit.id,
             "property_id": new_audit.property_id,
+            "audit_type": new_audit.audit_type,
             "date": new_audit.date.isoformat()
         }), 201
     except Exception as e:
@@ -90,12 +89,15 @@ def get_audit(audit_id):
         "date": audit.date.strftime('%Y-%m-%d'),
         "auditor_name": audit.auditor_name,
         "notes": audit.notes,
+        "audit_type": audit.audit_type,
         "steps": [
             {
                 "id": step.id,
                 "step_type": step.step_type,
                 "label": step.label,
-                "status": step.status
+                "status": step.status,
+                "ai_summary": step.ai_summary,    # 👈 make sure this line exists
+                "summary": step.summary
             }
             for step in audit.steps
         ]
@@ -109,95 +111,11 @@ def get_audit_by_property(property_id):
         return jsonify({
             "id": audit.id,
             "property_id": audit.property_id,
+            "audit_type": audit.audit_type,
             "date": audit.date.isoformat()
         })
     else:
         return jsonify({"error": "No audit found"}), 404
-
-
-@bp.route('/audits/<int:audit_id>/interview', methods=['POST'])
-def handle_interview(audit_id):
-    file = request.files.get('file')
-    if not file:
-        return jsonify({'error': 'Missing audio file'}), 400
-
-    # Save temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
-        file.save(tmp.name)
-        temp_path = tmp.name
-
-    # Step 1: Transcribe
-    try:
-        with open(temp_path, "rb") as f:
-            transcript_resp = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f
-            )
-        transcript = transcript_resp.text
-    except Exception as e:
-        os.remove(temp_path)
-        return jsonify({'error': 'Transcription failed', 'details': str(e)}), 500
-
-    # Step 2: Summarize
-    try:
-        summary_resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": (
-                    "You are an energy auditor assistant. Summarize the homeowner's concerns, comfort issues, "
-                    "and upgrade plans in concise, professional language."
-                )},
-                {"role": "user", "content": transcript}
-            ]
-        )
-        summary = summary_resp.choices[0].message.content
-    except Exception as e:
-        os.remove(temp_path)
-        return jsonify({'error': 'LLM summarization failed', 'details': str(e)}), 500
-
-    # Step 3: Upload audio
-    try:
-        file_url = upload_to_supabase_and_get_url(
-            file_path=temp_path,
-            audit_id=audit_id,
-            step_label='Initial Interview',
-            media_type='audio',
-            step_type='interview'
-        )
-    finally:
-        os.remove(temp_path)
-
-    # Step 4: Save step + media
-    step = AuditStep(
-        audit_id=audit_id,
-        step_type='interview',
-        label='Initial Interview',
-        notes="Interview completed",
-        status="Completed",  # new status column
-    )
-    db.session.add(step)
-    db.session.commit()
-
-    media = AuditMedia(
-        audit_id=audit_id,
-        step_id=step.id,
-        step_type='interview',
-        file_name=secure_filename(file.filename),
-        media_type='audio',
-        media_url=file_url,
-        summary=summary
-    )
-    db.session.add(media)
-    db.session.commit()
-
-    return jsonify({
-        'transcript': transcript,
-        'summary': summary,
-        'media_url': file_url,
-        'step_id': step.id,
-        'media_id': media.id
-    })
-
 
 @bp.route('/audits/<int:audit_id>/utility-bill', methods=['POST'])
 def handle_utility_bill(audit_id):
@@ -232,25 +150,25 @@ def handle_utility_bill(audit_id):
     finally:
         os.remove(temp_path)
 
-    # Step 3: Save new AuditStep + AuditMedia
+    # Step 3: Save AuditStep
     step = AuditStep(
         audit_id=audit_id,
         step_type='interview',
         label='Utility Bill',
-        notes="Utility bill uploaded",
-        status="Completed",  # new status column
+        status="Completed",
+        summary=summary
     )
     db.session.add(step)
     db.session.commit()
 
+    # Step 4: Save AuditMedia
     media = AuditMedia(
         audit_id=audit_id,
         step_id=step.id,
-        step_type='interview',
         file_name=secure_filename(file.filename),
         media_type='document',
         media_url=file_url,
-        summary=summary  # ✅ plain text summary
+        notes="Utility bill uploaded"
     )
     db.session.add(media)
     db.session.commit()
