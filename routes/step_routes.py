@@ -41,12 +41,6 @@ def serialize_step(step):
         ],
     }
 
-# --- Get all steps for an audit ---
-@bp.route('/audits/<int:audit_id>/steps', methods=['GET'])
-def get_audit_steps(audit_id):
-    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
-    return jsonify([serialize_step(s) for s in steps])
-
 
 # --- Create or update an audit step ---
 @bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
