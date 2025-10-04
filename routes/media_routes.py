@@ -73,6 +73,12 @@ def safe_parse(s: str):
 # Media Processing Worker
 # -------------------------
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
+    """Background processor for any uploaded media (photo, video, or audio)."""
+    from openai import OpenAI
+    import base64, traceback
+
+    client = OpenAI()
+
     with app.app_context():
         media = AuditMedia.query.get(media_id)
         step = AuditStep.query.get(media.step_id) if media else None
@@ -81,48 +87,113 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
             return
 
         try:
-            # Prepare context
+            # --- Handle PHOTO / VIDEO ---
             if media_type in ["photo", "video"]:
+                print(f"🖼 Processing {media_type} for step {step.id}")
                 with open(local_path, "rb") as f:
                     img_b64 = base64.b64encode(f.read()).decode("utf-8")
                 context = {"type": "image", "b64": img_b64}
+
+                # Map to schema based on step_type
+                schema_map = {
+                    "exterior": ExteriorSidingSchema,
+                    "hvac": HVACSchema,
+                    "insulation": InsulationSchema,
+                    "interview": InterviewSchema,
+                }
+                schema_cls = schema_map.get(step.step_type)
+                if not schema_cls:
+                    raise ValueError(f"No schema for step_type={step.step_type}")
+
+                # Run AI agent for photo/video analysis
+                parsed = run_agent(
+                    domain=step.step_type,
+                    context=context,
+                    audit_id=media.audit_id,
+                    mode="media",
+                )
+
+                step.ai_summary = parsed
+                step.status = "Completed"
+                db.session.commit()
+                print(f"✅ [process_media_async] Completed {media_type} for step {step.id}")
+
+            # --- Handle AUDIO ---
             elif media_type == "audio":
+                print(f"🎧 Transcribing and summarizing audio for step {step.id}")
+
+                # 1️⃣ Transcribe the audio
                 with open(local_path, "rb") as f:
                     transcript = client.audio.transcriptions.create(
-                        model="whisper-1",
+                        model="gpt-4o-mini-transcribe",
                         file=f
-                    ).text
+                    ).text.strip()
+
                 media.notes = transcript
-                context = {"type": "audio", "transcript": transcript}
+                db.session.commit()
+
+                # 2️⃣ Gather all audio transcripts for this step
+                all_audio = AuditMedia.query.filter_by(
+                    audit_id=step.audit_id,
+                    step_id=step.id,
+                    media_type="audio"
+                ).all()
+                transcripts = [
+                    m.notes for m in all_audio
+                    if m.notes and "Processing" not in m.notes
+                ]
+
+                if transcripts:
+                    # 3️⃣ Generic energy-audit-aware summarization
+                    summarization_prompt = f"""
+You are an expert residential energy auditor assistant. You will be given one or more audio transcripts 
+recorded during a home energy audit.
+
+The recordings may include:
+- Homeowner interviews
+- Auditor field observations (exterior, insulation, HVAC, etc.)
+- Verbal notes describing site conditions, comfort issues, or improvement opportunities
+
+Your task:
+- Summarize the combined content clearly and professionally.
+- Focus on relevant findings, comfort complaints, and upgrade opportunities.
+- Include contextual clues (e.g., "North exterior wall shows…" or "Auditor noted attic insulation gaps").
+- Write in a factual, concise narrative suitable for an audit report.
+- Do NOT infer or add unspoken details.
+
+Step context:
+- Step type: {step.step_type or "unknown"}
+- Step label: {step.label or "unspecified"}
+
+Now summarize the following transcripts:
+"""
+
+                    try:
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {"role": "system", "content": summarization_prompt},
+                                {"role": "user", "content": "\n\n".join(transcripts)}
+                            ],
+                        )
+                        summary = response.choices[0].message.content.strip()
+                    except Exception as e:
+                        print(f"⚠️ Summarization failed: {e}")
+                        traceback.print_exc()
+                        summary = "\n".join(transcripts)
+
+                    # Save summary to step
+                    step.summary = summary
+                    step.status = "Completed"
+                    db.session.commit()
+                    print(f"✅ [process_media_async] Audio summary saved for step {step.id}")
+
             else:
-                raise ValueError("Unsupported media type")
-
-            # Select schema
-            schema_map = {
-                "exterior": ExteriorSidingSchema,
-                "hvac": HVACSchema,
-                "insulation": InsulationSchema,
-                "interview": InterviewSchema,
-            }
-            schema_cls = schema_map.get(step.step_type)
-            if not schema_cls:
-                raise ValueError(f"No schema for step_type={step.step_type}")
-
-            # Run agent
-            parsed = run_agent(
-                domain=step.step_type,
-                context=context,
-                audit_id=media.audit_id,
-                mode="media",
-            )
-
-            # Save structured output to step
-            step.ai_summary = parsed
-            step.status = "Completed"
-            db.session.commit()
+                raise ValueError(f"Unsupported media type: {media_type}")
 
         except Exception as e:
             print(f"❌ [process_media_async] Failed: {e}")
+            traceback.print_exc()
             if step:
                 step.status = "Error"
                 step.ai_summary = {"error": str(e)}
