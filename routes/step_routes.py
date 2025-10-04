@@ -46,7 +46,7 @@ def serialize_step(step):
 @bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
     data = request.get_json()
-    step_id = data.get("id")  # ✅ new: explicit step id
+    step_id = data.get("id")  # ✅ explicit step id
     step_type = data.get("step_type")
     label = data.get("label")
     status = data.get("status")  # Not Started, Processing, Completed, Error, Not Accessible
@@ -61,7 +61,8 @@ def create_or_update_audit_step(audit_id):
         if not step:
             return jsonify({'error': 'Step not found'}), 404
 
-        notes_data = parse_notes(step.notes)
+        # Work with JSONB meta dict
+        notes_data = step.meta or {}
 
         if step.step_type == "exterior":
             if "orientation" in data:
@@ -83,7 +84,12 @@ def create_or_update_audit_step(audit_id):
         if "status" in data:
             step.status = status
 
-        step.notes = json.dumps(notes_data)
+        step.meta = notes_data
+        if "summary" in data:
+            step.summary = data.get("summary")
+        if "ai_summary" in data:
+            step.ai_summary = data.get("ai_summary")
+
         db.session.commit()
         return jsonify({"message": "Step updated", "id": step.id}), 200
 
@@ -94,7 +100,7 @@ def create_or_update_audit_step(audit_id):
         label=label
     ).first()
 
-    notes_data = parse_notes(step.notes if step else {})
+    notes_data = step.meta if step else {}
 
     if step_type == "exterior":
         if "orientation" in data:
@@ -107,12 +113,15 @@ def create_or_update_audit_step(audit_id):
     if "notes" in data and isinstance(data["notes"], dict):
         notes_data.update(data["notes"])
 
-    notes_str = json.dumps(notes_data)
-
     if step:
         if status:
             step.status = status
-        step.notes = notes_str
+        step.meta = notes_data
+        if "summary" in data:
+            step.summary = data.get("summary")
+        if "ai_summary" in data:
+            step.ai_summary = data.get("ai_summary")
+
         db.session.commit()
         return jsonify({"message": "Step updated", "id": step.id}), 200
     else:
@@ -121,7 +130,9 @@ def create_or_update_audit_step(audit_id):
             step_type=step_type,
             label=label,
             status=status if status else "Not Started",
-            notes=notes_str,
+            meta=notes_data,
+            summary=data.get("summary"),
+            ai_summary=data.get("ai_summary"),
         )
         db.session.add(new_step)
         db.session.commit()
@@ -163,39 +174,6 @@ def get_audit_steps(audit_id):
         }
         for s in steps
     ])
-
-
-
-@bp.route("/audits/<int:audit_id>/steps", methods=["POST"])
-def create_audit_step(audit_id):
-    """Create a new step for an audit"""
-    data = request.get_json() or {}
-
-    label = data.get("label")
-    step_type = data.get("step_type", "exterior")
-    status = data.get("status", "Not Started")
-
-    if not label:
-        return jsonify({"error": "Missing label"}), 400
-
-    step = AuditStep(
-        audit_id=audit_id,
-        label=label,
-        step_type=step_type,
-        status=status,
-    )
-    db.session.add(step)
-    db.session.commit()
-
-    return jsonify({
-        "id": step.id,
-        "audit_id": step.audit_id,
-        "label": step.label,
-        "step_type": step.step_type,
-        "status": step.status,
-        "summary": step.summary,
-        "ai_summary": step.ai_summary,
-    }), 201
 
 @bp.route("/audits/<int:audit_id>/steps/<int:step_id>", methods=["DELETE"])
 def delete_audit_step(audit_id, step_id):
