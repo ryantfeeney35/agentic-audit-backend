@@ -321,10 +321,10 @@ def upload_media_by_step_id(step_id):
     db.session.commit()
 
     # async AI processing
-    #Thread(
-    #    target=process_media_async,
-    #    args=(current_app._get_current_object(), media.id, upload_local_path, public_url, media_type)
-    #).start()
+    Thread(
+        target=process_media_async,
+        args=(current_app._get_current_object(), media.id, upload_local_path, public_url, media_type)
+    ).start()
 
     return jsonify({
         "id": media.id,
