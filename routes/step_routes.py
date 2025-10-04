@@ -13,7 +13,7 @@ def parse_meta(meta):
     try:
         return json.loads(meta)
     except Exception:
-        return {"raw": meta}  # fallback
+        return {"raw": meta}
 
 def serialize_step(step):
     notes_data = parse_meta(step.meta)
@@ -26,7 +26,7 @@ def serialize_step(step):
         "orientation": notes_data.get("orientation") if step.step_type == "exterior" else None,
         "siding_material": notes_data.get("siding_material") if step.step_type == "exterior" else None,
         "rooms": notes_data.get("rooms") if step.step_type == "exterior" else None,
-        "meta": notes_data,  # always return full meta blob
+        "meta": notes_data,
         "summary": step.summary,
         "ai_summary": step.ai_summary,
         "media": [
@@ -36,13 +36,14 @@ def serialize_step(step):
                 "file_name": m.file_name,
                 "media_type": m.media_type,
                 "notes": m.notes,
-                "created_at": m.created_at.isoformat()
+                "created_at": m.created_at.isoformat(),
             }
             for m in AuditMedia.query.filter_by(step_id=step.id).all()
         ],
     }
 
-@bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
+# --- Create or update a step ---
+@bp.route("/audits/<int:audit_id>/steps", methods=["POST"])
 def create_or_update_audit_step(audit_id):
     data = request.get_json()
     step_id = data.get("id")
@@ -51,32 +52,34 @@ def create_or_update_audit_step(audit_id):
     status = data.get("status")
 
     if not step_id and (not step_type or not label):
-        return jsonify({'error': 'Missing step_type or label'}), 400
+        return jsonify({"error": "Missing step_type or label"}), 400
 
     # --- UPDATE existing step ---
     if step_id:
         step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
         if not step:
-            return jsonify({'error': 'Step not found'}), 404
+            return jsonify({"error": "Step not found"}), 404
 
-        # Safely load JSONB meta (never overwrite it fully)
+        # Load current meta safely
         notes_data = step.meta.copy() if isinstance(step.meta, dict) else {}
 
-        # Update meta fields for exterior steps
+        # ✅ Allow meta updates for ALL step types
+        if "meta" in data and isinstance(data["meta"], dict):
+            notes_data.update(data["meta"])
+
+        # Preserve exterior-specific field support
         if step.step_type == "exterior":
             if "orientation" in data:
                 notes_data["orientation"] = data["orientation"]
-                step.label = data["orientation"]  # keep label matching orientation
+                step.label = data["orientation"]
             if "siding_material" in data:
                 notes_data["siding_material"] = data["siding_material"]
             if "rooms" in data:
                 notes_data["rooms"] = data["rooms"]
 
-        # Merge any extra notes explicitly passed in
-        if isinstance(data.get("notes"), dict):
+        if "notes" in data and isinstance(data["notes"], dict):
             notes_data.update(data["notes"])
 
-        # Apply other updates
         if "label" in data and not data.get("orientation"):
             step.label = data["label"]
         if "status" in data:
@@ -86,14 +89,17 @@ def create_or_update_audit_step(audit_id):
         if "ai_summary" in data:
             step.ai_summary = data["ai_summary"]
 
-        # ✅ assign merged meta and commit
         step.meta = notes_data
         db.session.commit()
         return jsonify({"message": "Step updated", "id": step.id, "meta": step.meta}), 200
 
-    # --- CREATE new step if it doesn’t exist ---
+    # --- CREATE new step ---
     step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
     notes_data = step.meta.copy() if step and isinstance(step.meta, dict) else {}
+
+    # ✅ Also merge incoming meta for creation
+    if "meta" in data and isinstance(data["meta"], dict):
+        notes_data.update(data["meta"])
 
     if step_type == "exterior":
         if "orientation" in data:
@@ -103,7 +109,7 @@ def create_or_update_audit_step(audit_id):
         if "rooms" in data:
             notes_data["rooms"] = data["rooms"]
 
-    if isinstance(data.get("notes"), dict):
+    if "notes" in data and isinstance(data["notes"], dict):
         notes_data.update(data["notes"])
 
     if step:
