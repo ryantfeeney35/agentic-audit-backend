@@ -169,3 +169,51 @@ def get_audit_steps(audit_id):
         }
         for s in steps
     ])
+
+
+
+@bp.route("/audits/<int:audit_id>/steps", methods=["POST"])
+def create_audit_step(audit_id):
+    """Create a new step for an audit"""
+    data = request.get_json() or {}
+
+    label = data.get("label")
+    step_type = data.get("step_type", "exterior")
+    status = data.get("status", "Not Started")
+
+    if not label:
+        return jsonify({"error": "Missing label"}), 400
+
+    step = AuditStep(
+        audit_id=audit_id,
+        label=label,
+        step_type=step_type,
+        status=status,
+    )
+    db.session.add(step)
+    db.session.commit()
+
+    return jsonify({
+        "id": step.id,
+        "audit_id": step.audit_id,
+        "label": step.label,
+        "step_type": step.step_type,
+        "status": step.status,
+        "summary": step.summary,
+        "ai_summary": step.ai_summary,
+    }), 201
+
+@bp.route("/audits/<int:audit_id>/steps/<int:step_id>", methods=["DELETE"])
+def delete_audit_step(audit_id, step_id):
+    """Delete a step (and any associated media) from an audit"""
+    step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
+    if not step:
+        return jsonify({"error": "Step not found"}), 404
+
+    try:
+        db.session.delete(step)
+        db.session.commit()
+        return jsonify({"message": f"Step {step_id} deleted successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to delete step: {e}"}), 500
