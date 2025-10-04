@@ -24,14 +24,56 @@ class ExteriorSidingSchema(BaseModel):
     summary: str
 
 class HVACSchema(BaseModel):
-    system_type: str
-    brand: Optional[str]
-    model: Optional[str]
-    efficiency_rating: Optional[str]
-    condition: str
-    ducting: Optional[str]
-    safety_issues: List[str] = Field(default_factory=list)
-    summary: str
+    # 🔹 Core system details
+    system_type: str = Field(
+        ...,
+        description="Type of HVAC system (e.g. Split Heat Pump, Central AC, Furnace, Mini-Split, Package Unit)",
+    )
+    fuel_type: Optional[str] = Field(
+        default=None,
+        description="Primary heating/cooling energy source (Electric, Natural Gas, Propane, etc.)",
+    )
+    brand: Optional[str] = Field(
+        default=None,
+        description="Manufacturer or brand name (e.g. Carrier, Trane, Lennox)",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="Model number or identifier if visible on label",
+    )
+
+    # 🔹 Efficiency & condition
+    efficiency_rating: Optional[str] = Field(
+        default=None,
+        description="Efficiency rating or SEER/HSPF/AFUE label (e.g. SEER 16, AFUE 92%)",
+    )
+    condition: str = Field(
+        ...,
+        description="Overall observed condition of the HVAC system (Good, Fair, Poor, Inoperative)",
+    )
+
+    # 🔹 Ducting & airflow
+    ducting_type: Optional[str] = Field(
+        default=None,
+        description="Type of duct material (Flex, Metal, Ductboard, Unknown)",
+    )
+    ducting_condition: Optional[str] = Field(
+        default=None,
+        description="Observed duct condition (Good, Leaking, Poorly Insulated, Damaged, Asbestos Tape)",
+    )
+
+    # 🔹 Safety & issues
+    safety_issues: List[str] = Field(
+        default_factory=list,
+        description="List of observed safety or operational concerns (e.g. 'Gas leak', 'Missing disconnect', 'Blocked return')",
+    )
+
+    # 🔹 Output
+    summary: str = Field(
+        ...,
+        description="Concise narrative summary of HVAC findings and recommendations",
+    )
+    recommended_upgrades: List[str] = Field(default_factory=list)
 
 class InsulationSchema(BaseModel):
     insulation_type: str
