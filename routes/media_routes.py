@@ -85,11 +85,52 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
             # --- PHOTO / VIDEO ---
             if media_type in ["photo", "video"]:
                 print(f"🖼 Processing {media_type} for step {step.id}")
-                with open(local_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                context = {"type": "image", "b64": img_b64}
 
-                # Run analysis using appropriate schema
+                # 1️⃣ Gather all image/video media for this step
+                all_media = AuditMedia.query.filter(
+                    AuditMedia.step_id == step.id,
+                    AuditMedia.media_type.in_(["photo", "video"])
+                ).all()
+
+                if not all_media:
+                    print(f"⚠️ No media found for step {step.id}")
+                    return
+
+                # 2️⃣ Convert all to base64 for context
+                images_b64 = []
+                for m in all_media:
+                    try:
+                        file_path = None
+
+                        # if the current upload, use the just-saved local_path (fast path)
+                        if m.id == media.id:
+                            file_path = local_path
+                        else:
+                            # otherwise, download from Supabase storage temporarily
+                            from urllib.request import urlopen
+                            response = urlopen(m.media_url)
+                            tmp_path = os.path.join(tempfile.gettempdir(), os.path.basename(m.media_url))
+                            with open(tmp_path, "wb") as f:
+                                f.write(response.read())
+                            file_path = tmp_path
+
+                        with open(file_path, "rb") as f:
+                            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                        images_b64.append({
+                            "file_name": m.file_name,
+                            "b64": img_b64
+                        })
+                    except Exception as e:
+                        print(f"⚠️ Skipped media {m.id} due to error: {e}")
+
+                # 3️⃣ Build a richer context for the agent
+                context = {
+                    "type": "image_batch",
+                    "count": len(images_b64),
+                    "images": images_b64
+                }
+
+                # 4️⃣ Pick schema and run agent
                 schema_map = {
                     "exterior": ExteriorSidingSchema,
                     "hvac": HVACSchema,
@@ -107,11 +148,11 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                     mode="media",
                 )
 
-                # Save AI summary result to the step
+                # 5️⃣ Save parsed AI summary at the step level
                 step.ai_summary = parsed
-
+                step.status = "Completed"
                 db.session.commit()
-                print(f"✅ [process_media_async] Completed {media_type} for step {step.id}")
+                print(f"✅ [process_media_async] Completed {len(images_b64)} {media_type}(s) for step {step.id}")
 
             # --- AUDIO ---
             elif media_type == "audio":

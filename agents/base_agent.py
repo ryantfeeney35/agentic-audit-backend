@@ -3,11 +3,13 @@ import base64
 import json
 from langchain.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
-from .schemas import (AgentOutput,
+from .schemas import (
+    AgentOutput,
     ExteriorSidingSchema,
     HVACSchema,
     InsulationSchema,
-    InterviewSchema)
+    InterviewSchema,
+)
 from models import AgentConversation, db
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ MEDIA_SCHEMAS = {
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
 }
+
 
 def run_orchestrator_chat(messages: list[dict], domain: str) -> str:
     """Wrapper around llm.invoke that logs inputs + outputs clearly."""
@@ -43,7 +46,7 @@ def run_agent(
     context: str | dict,
     bootstrap: bool = False,
     audit_id: int | None = None,
-    mode: str = "followup",   # "bootstrap" | "followup" | "recommendations" | "media"
+    mode: str = "followup",  # "bootstrap" | "followup" | "recommendations" | "media"
 ) -> dict:
     # Pick parser based on mode/domain
     if mode == "media" and domain in MEDIA_SCHEMAS:
@@ -101,47 +104,103 @@ def run_agent(
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 
     # -------------------------
-    # User message construction
+    # Build user messages based on context type
     # -------------------------
-    if isinstance(context, dict) and context.get("type") == "image":
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{context['b64']}" }}
-            ]},
-        ]
-    elif isinstance(context, dict) and context.get("type") == "audio":
-        # TODO: add transcription before feeding back in
-        transcript = context.get("transcript", "")
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": transcript},
-        ]
-    else:  # plain text context
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": context},
-        ]
+    messages = [{"role": "system", "content": system_message}]
 
+    if isinstance(context, dict):
+        # 🎨 Handle single image
+        if context.get("type") == "image" and "b64" in context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{context['b64']}"
+                            },
+                        }
+                    ],
+                }
+            )
+
+        # 🖼️ Handle batch of images (multiple photos/videos)
+        elif context.get("type") == "image_batch" and "images" in context:
+            content_items = []
+            for img in context["images"]:
+                b64 = img.get("b64")
+                fname = img.get("file_name", "photo.jpg")
+                if not b64:
+                    continue
+                content_items.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}",
+                            "detail": "high",
+                        },
+                    }
+                )
+                # add text labels for traceability
+                content_items.append({"type": "text", "text": f"Image: {fname}"})
+            messages.append({"role": "user", "content": content_items})
+
+        # 🔊 Handle audio
+        elif context.get("type") == "audio":
+            transcript = context.get("transcript", "")
+            messages.append({"role": "user", "content": transcript})
+
+        else:
+            messages.append({"role": "user", "content": json.dumps(context)})
+
+    else:
+        # Default: plain text
+        messages.append({"role": "user", "content": str(context)})
+
+    # -------------------------
+    # Invoke the model
+    # -------------------------
     resp_text = run_orchestrator_chat(messages, domain)
 
-    # ✅ Persist conversation for interactive modes
+    # -------------------------
+    # Persist conversation (only for interactive modes)
+    # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        db.session.add(AgentConversation(
-            audit_id=audit_id, domain=domain, role="system", content=system_message
-        ))
-        db.session.add(AgentConversation(
-            audit_id=audit_id, domain=domain, role="user", content=str(context)[:2000]
-        ))
-        db.session.add(AgentConversation(
-            audit_id=audit_id, domain=domain, role="assistant", content=resp_text
-        ))
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id, domain=domain, role="system", content=system_message
+            )
+        )
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id,
+                domain=domain,
+                role="user",
+                content=str(context)[:2000],
+            )
+        )
+        db.session.add(
+            AgentConversation(
+                audit_id=audit_id,
+                domain=domain,
+                role="assistant",
+                content=resp_text,
+            )
+        )
         db.session.commit()
 
-    # ✅ Parse with schema
+    # -------------------------
+    # Parse response
+    # -------------------------
     try:
         parsed = parser.parse(resp_text)
         return parsed.model_dump()
     except Exception as e:
         logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)
-        return {"summary": "", "followup_questions": [], "recommendations": []}
+        return {
+            "summary": "",
+            "followup_questions": [],
+            "recommendations": [],
+            "error": str(e),
+        }
