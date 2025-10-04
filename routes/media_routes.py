@@ -172,12 +172,14 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                             ],
                         )
                         summary = response.choices[0].message.content.strip()
+                        db.session.commit()
                     except Exception as e:
                         print(f"⚠️ Summarization failed: {e}")
                         traceback.print_exc()
-                        summary = "\n".join(transcripts)
-                        step.summary = summary
-                        db.session.commit()
+                        if step:
+                            step.status = "Error"
+                            step.summary = {"error": str(e)}
+                            db.session.commit()
 
                     
                     print(f"✅ [process_media_async] Audio summary saved for step {step.id}")
