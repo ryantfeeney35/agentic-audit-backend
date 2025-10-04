@@ -35,7 +35,7 @@ def serialize_step(step):
                 "media_url": m.media_url,
                 "file_name": m.file_name,
                 "media_type": m.media_type,
-                "summary": m.summary,
+                "notes": m.notes,
                 "created_at": m.created_at.isoformat()
             }
             for m in AuditMedia.query.filter_by(step_id=step.id).all()
