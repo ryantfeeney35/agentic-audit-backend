@@ -1,196 +1,117 @@
-# routes/agent_routes.py
-from flask import Blueprint, jsonify, request
-from models import db
-import logging
-from agents.base_agent import run_agent
-from agents.utils import merge_agent_outputs
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
 
-# ----------------------------
-# Logging setup
-# ----------------------------
-logger = logging.getLogger("orchestration")
-logger.setLevel(logging.DEBUG)
-
-bp = Blueprint("agent_review", __name__)
-
-# ----------------------------
-# Conversation helpers
-# ----------------------------
-def get_conversation_history(audit_id):
-    """Retrieve all messages for an audit, ordered by creation time."""
-    rows = (
-        AgentConversation.query
-        .filter_by(audit_id=audit_id)
-        .order_by(AgentConversation.created_at.asc())
-        .all()
-    )
-    return [{"role": r.role, "content": r.content, "domain": r.domain} for r in rows]
+db = SQLAlchemy()
 
 
-def save_message(audit_id, domain, role, content):
-    """Save a single conversation message."""
-    msg = AgentConversation(
-        audit_id=audit_id,
-        domain=domain,
-        role=role,
-        content=content,
-    )
-    db.session.add(msg)
-    db.session.commit()
-    return msg
+class Property(db.Model):
+    __tablename__ = 'properties'
 
-# ----------------------------
-# Main Orchestration Agent
-# ----------------------------
-def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, user_answer=None):
-    """Run orchestrator to aggregate insights from all domain agents."""
-    audit = Audit.query.get(audit_id)
-    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
-    property_obj = audit.property if audit else None
+    id = db.Column(db.Integer, primary_key=True)
+    street = db.Column(db.String)
+    city = db.Column(db.String)
+    state = db.Column(db.String)
+    zip_code = db.Column(db.String)
+    year_built = db.Column(db.Integer)
+    sqft = db.Column(db.Integer, nullable=True)
+    property_type = db.Column(db.String, nullable=False)
 
-    # --- Build context summary ---
-    context_summary = []
-
-    if property_obj:
-        address = f"{property_obj.street}, {property_obj.city}, {property_obj.state} {property_obj.zip_code}"
-        sqft = f"{property_obj.sqft} sqft" if property_obj.sqft else "sqft unknown"
-        year = f"Year built: {property_obj.year_built}" if property_obj.year_built else "Year built unknown"
-        context_summary.append(f"🏠 Property: {address}, {sqft}, {year}")
-
-    if audit and audit.notes:
-        context_summary.append(f"🗣️ Interview summary: {audit.notes}")
-
-    # --- Step-level context ---
-    for step in steps:
-        if step.status == "Not Accessible":
-            continue
-
-        # Step summary
-        if step.summary:
-            context_summary.append(f"📋 {step.label} ({step.step_type}) — {step.summary}")
-
-        # AI summary (structured findings)
-        if step.ai_summary and isinstance(step.ai_summary, dict):
-            ai_parts = []
-            for k, v in step.ai_summary.items():
-                if isinstance(v, (str, int, float)):
-                    ai_parts.append(f"{k.replace('_', ' ').title()}: {v}")
-            if ai_parts:
-                context_summary.append(f"🤖 {step.step_type.title()} findings: " + ", ".join(ai_parts))
-
-    full_context = "\n".join(context_summary)
-    logger.debug(f"🧠 [Orchestrator Context]\n{full_context[:1000]}")
-
-    # --- Conversation history ---
-    history = get_conversation_history(audit_id)
-    filtered_history = [
-        m for m in history if not (m["role"] == "assistant" and m["domain"] == "orchestrator")
-    ]
-
-    # --- Save new user answer if provided ---
-    if from_user and user_answer and user_answer.strip():
-        save_message(audit_id, "orchestrator", "user", user_answer.strip())
-
-    # --- Run all relevant agents ---
-    agent_replies = []
-    domains = ["exterior", "insulation", "hvac"]
-    for domain in domains:
-        try:
-            logger.info(f"⚙️ Running {domain} agent...")
-            result = run_agent(domain, full_context + "\n" + context, bootstrap=bootstrap, audit_id=audit_id)
-            agent_replies.append(result)
-        except Exception as e:
-            logger.exception(f"❌ {domain} agent failed: {e}")
-            agent_replies.append({"summary": f"Error in {domain} agent: {str(e)}"})
-
-    # --- Merge agent outputs ---
-    final_reply = merge_agent_outputs(agent_replies, bootstrap=bootstrap)
-
-    # --- Save orchestrator reply ---
-    save_message(audit_id, "orchestrator", "assistant", final_reply)
-    logger.debug("✅ Final Orchestrator Reply Saved")
-
-    return final_reply
-
-# ----------------------------
-# Routes
-# ----------------------------
-@bp.route("/agent-review", methods=["POST"])
-def agent_review():
-    """Primary endpoint for ReviewPage orchestration."""
-    data = request.json or {}
-    audit_id = data.get("auditId")
-    context = data.get("context", "")
-    user_answer = data.get("userAnswer", "")
-    bootstrap = data.get("bootstrap", False)
-
-    if not audit_id:
-        return jsonify({"error": "auditId required"}), 400
-
-    try:
-        response = orchestration_agent(
-            audit_id=audit_id,
-            context=context,
-            from_user=not bootstrap,
-            bootstrap=bootstrap,
-            user_answer=user_answer,
-        )
-        return jsonify({"response": response})
-    except Exception as e:
-        logger.exception("❌ Orchestrator failed")
-        return jsonify({"error": str(e)}), 500
+    # Relationships
+    audits = relationship("Audit", back_populates="property", cascade="all, delete-orphan")
 
 
-@bp.route("/agent-conversations/merged", methods=["GET"])
-def get_merged_conversation():
-    """Return orchestrator + user conversation thread."""
-    audit_id = request.args.get("audit_id")
-    if not audit_id:
-        return jsonify({"error": "audit_id required"}), 400
+class Audit(db.Model):
+    __tablename__ = 'audits'
 
-    rows = (
-        AgentConversation.query
-        .filter_by(audit_id=audit_id)
-        .order_by(AgentConversation.created_at.asc())
-        .all()
-    )
+    id = db.Column(db.Integer, primary_key=True)
+    property_id = db.Column(db.Integer, db.ForeignKey('properties.id', ondelete="CASCADE"), nullable=False)
+    date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
+    auditor_name = db.Column(db.String, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    audit_type = db.Column(db.String(50), nullable=False, default="energy_audit")  
+    # values: "energy_audit", "home_inspection_energy_audit"
 
-    merged = [
-        {
-            "role": r.role,
-            "domain": r.domain,
-            "content": r.content,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-        if r.domain == "orchestrator" or r.role == "user"
-    ]
+    # Relationships
+    property = relationship("Property", back_populates="audits")
+    steps = relationship("AuditStep", back_populates="audit", cascade="all, delete-orphan")
+    media = relationship("AuditMedia", back_populates="audit", cascade="all, delete-orphan")
+    recommendations = relationship("AuditRecommendation", back_populates="audit", cascade="all, delete-orphan")
+class AuditStep(db.Model):
+    __tablename__ = "audit_steps"
 
-    return jsonify(merged)
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    step_type = db.Column(db.String, nullable=False)
+    label = db.Column(db.String, nullable=False)
+    status = db.Column(db.String, default="Not Started")
+
+    meta = db.Column(JSONB, default=dict)
+    summary = db.Column(db.Text, nullable=True)
+    ai_summary = db.Column(JSONB, default=dict)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # ✅ must match Audit.steps
+    audit = relationship("Audit", back_populates="steps")
+    # ✅ must match AuditMedia.step
+    media = relationship("AuditMedia", back_populates="step", cascade="all, delete-orphan")
 
 
-@bp.route("/agent-conversations", methods=["POST"])
-def add_conversation_message():
-    """Manually append a message to conversation (debug / interactive mode)."""
-    data = request.get_json() or {}
-    audit_id = data.get("audit_id")
-    role = data.get("role")
-    content = data.get("content")
-    domain = data.get("domain", "orchestrator")
+class AuditMedia(db.Model):
+    __tablename__ = "audit_media"
 
-    if not audit_id or not role or not content:
-        return jsonify({"error": "audit_id, role, and content are required"}), 400
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    step_id = db.Column(db.Integer, db.ForeignKey("audit_steps.id", ondelete="CASCADE"), nullable=False)
 
-    try:
-        msg = save_message(audit_id, domain, role, content)
-        return jsonify({
-            "id": msg.id,
-            "audit_id": msg.audit_id,
-            "domain": msg.domain,
-            "role": msg.role,
-            "content": msg.content,
-            "created_at": msg.created_at.isoformat(),
-        }), 201
-    except Exception as e:
-        logger.exception("❌ Failed to save conversation message")
-        return jsonify({"error": str(e)}), 500
+    media_url = db.Column(db.String, nullable=False)
+    file_name = db.Column(db.String, nullable=False)
+    media_type = db.Column(db.String, nullable=False)
+    notes = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # ✅ must match Audit.media
+    audit = relationship("Audit", back_populates="media")
+    # ✅ must match AuditStep.media
+    step = relationship("AuditStep", back_populates="media")
+
+
+class AgentConversation(db.Model):
+    __tablename__ = "agent_conversations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, nullable=False)
+    domain = db.Column(db.String, nullable=False)   # insulation, hvac, exterior, interview
+    role = db.Column(db.String, nullable=False)     # system, user, assistant
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class AuditRecommendation(db.Model):
+    __tablename__ = "audit_recommendations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    step_type = db.Column(db.String(50), nullable=False)
+    summary = db.Column(db.Text, nullable=False)
+    annual_savings_usd = db.Column(db.Float)
+    upgrade_cost_usd = db.Column(db.Float)
+    payback_years = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    audit = relationship("Audit", back_populates="recommendations")
+
+
+class Contractor(db.Model):
+    __tablename__ = "contractors"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    contact = db.Column(db.String(120), nullable=False)  # phone, email, etc.
+    step_type = db.Column(db.String(50), nullable=False)  # e.g., insulation, hvac, exterior
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
