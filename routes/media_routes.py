@@ -262,3 +262,72 @@ def delete_media(media_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Failed to delete media: {e}"}), 500
+    
+@bp.route('/steps/<int:step_id>/upload', methods=['POST'])
+def upload_media_by_step_id(step_id):
+    """Upload photo or audio directly to a specific step_id"""
+    from routes.media_routes import _guess_content_type, _upload_to_supabase_bytes, process_media_async
+    import tempfile, os, subprocess
+    from flask import current_app
+    from threading import Thread
+
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    media_type = request.form.get('media_type', 'photo')
+    step_type = request.form.get('step_type', 'exterior')
+
+    step = AuditStep.query.get(step_id)
+    if not step:
+        return jsonify({'error': 'Step not found'}), 404
+
+    filename = f"{step.audit_id}_{step.label}_{file.filename}"
+    tmp_path = os.path.join(tempfile.gettempdir(), filename)
+    file.save(tmp_path)
+
+    # compress video if needed
+    MAX_SIZE_BYTES = 50 * 1024 * 1024
+    upload_local_path = tmp_path
+    if media_type == "video" and os.path.getsize(tmp_path) > MAX_SIZE_BYTES:
+        compressed_path = os.path.join(tempfile.gettempdir(), f"compressed_{filename}")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", tmp_path,
+            "-vf", "scale=1280:-2",
+            "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
+            "-c:a", "aac", "-b:a", "128k", compressed_path
+        ], check=True)
+        upload_local_path = compressed_path
+
+    # upload to supabase
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME")
+    content_type = file.mimetype or _guess_content_type(filename)
+    with open(upload_local_path, "rb") as f:
+        data = f.read()
+    _upload_to_supabase_bytes(filename, data, content_type)
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{filename}"
+
+    # create AuditMedia record
+    media = AuditMedia(
+        audit_id=step.audit_id,
+        step_id=step.id,
+        media_url=public_url,
+        file_name=file.filename,
+        media_type=media_type,
+        notes="Processing…"
+    )
+    db.session.add(media)
+    db.session.commit()
+
+    # async AI processing
+    #Thread(
+    #    target=process_media_async,
+    #    args=(current_app._get_current_object(), media.id, upload_local_path, public_url, media_type)
+    #).start()
+
+    return jsonify({
+        "id": media.id,
+        "media_url": public_url,
+        "status": "Processing"
+    }), 201
