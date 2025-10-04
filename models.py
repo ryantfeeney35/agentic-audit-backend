@@ -1,5 +1,6 @@
 # routes/agent_routes.py
 from flask import Blueprint, jsonify, request
+from models import db
 import logging
 from agents.base_agent import run_agent
 from agents.utils import merge_agent_outputs
