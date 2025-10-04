@@ -1,9 +1,8 @@
 # agents/context_builder.py
-from models import Audit, AuditStep, AuditMedia
+from models import Audit, AuditStep
 
 def build_audit_context(audit_id: int) -> str:
-    """Collect property, notes, steps, and media into a single text context string."""
-
+    """Collect property, summaries, and AI insights into a single text context string."""
     audit = Audit.query.get(audit_id)
     if not audit:
         return ""
@@ -15,28 +14,31 @@ def build_audit_context(audit_id: int) -> str:
         address = f"{audit.property.street}, {audit.property.city}, {audit.property.state} {audit.property.zip_code}"
         sqft = f"{audit.property.sqft} sqft" if audit.property.sqft else "sqft unknown"
         year = f"Year built: {audit.property.year_built}" if audit.property.year_built else "Year built unknown"
-        context_summary.append(f"Property: {address}, {sqft}, {year}")
+        context_summary.append(f"🏠 Property: {address}, {sqft}, {year}")
 
-    # --- Interview notes ---
+    # --- Interview notes (still stored at audit level) ---
     if audit.notes:
-        context_summary.append(f"Interview summary: {audit.notes}")
+        context_summary.append(f"🗣️ Interview summary: {audit.notes}")
 
-    # --- Steps + media ---
+    # --- Steps + structured AI summaries ---
     steps = AuditStep.query.filter_by(audit_id=audit_id).all()
     for step in steps:
         if step.status == "Not Accessible":
             continue
 
-        if step.notes:
-            context_summary.append(f"{step.label} ({step.step_type}) - Notes: {step.notes}")
+        # Step summary (human-written or AI-summarized audio)
+        if step.summary:
+            context_summary.append(f"📋 {step.label} ({step.step_type}) — {step.summary}")
 
-        for media in step.media:
-            if media.summary:
-                if step.step_type == "interview":
-                    context_summary.append(f"Interview media summary: {media.summary}")
-                elif step.step_type == "utility_bill":
-                    context_summary.append(f"Utility bill summary: {media.summary}")
-                else:
-                    context_summary.append(f"{step.label} media summary: {media.summary}")
+        # AI structured output (parsed JSONB)
+        if step.ai_summary and isinstance(step.ai_summary, dict):
+            ai_parts = []
+            for key, val in step.ai_summary.items():
+                # Flatten any nested simple fields
+                if isinstance(val, (str, int, float)):
+                    ai_parts.append(f"{key.replace('_', ' ').title()}: {val}")
+            if ai_parts:
+                context_summary.append(f"🤖 {step.step_type.title()} findings: " + ", ".join(ai_parts))
 
+    # --- Final compiled context string ---
     return "\n".join(context_summary)
