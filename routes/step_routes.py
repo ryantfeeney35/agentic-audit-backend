@@ -154,3 +154,18 @@ def get_media_by_step_label(audit_id, step_label):
         }
         for m in media_items
     ])
+
+@bp.route("/audits/<int:audit_id>/steps", methods=["GET"])
+def get_audit_steps(audit_id):
+    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
+    return jsonify([
+        {
+            "id": s.id,
+            "label": s.label,
+            "step_type": s.step_type,
+            "status": s.status,
+            "summary": s.summary,
+            "ai_summary": s.ai_summary,
+        }
+        for s in steps
+    ])
