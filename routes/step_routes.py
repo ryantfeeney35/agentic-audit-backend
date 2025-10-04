@@ -118,7 +118,7 @@ def create_or_update_audit_step(audit_id):
         step.summary = data.get("summary", step.summary)
         step.ai_summary = data.get("ai_summary", step.ai_summary)
         db.session.commit()
-        return jsonify({"message": "Step updated", "id": step.id, "meta": step.meta}), 200
+        return jsonify(serialize_step(step)), 200
 
     new_step = AuditStep(
         audit_id=audit_id,
@@ -131,7 +131,7 @@ def create_or_update_audit_step(audit_id):
     )
     db.session.add(new_step)
     db.session.commit()
-    return jsonify({"message": "Step created", "id": new_step.id, "meta": new_step.meta}), 201
+    return jsonify(serialize_step(new_step)), 201
 
 # --- Get all steps for an audit ---
 @bp.route("/audits/<int:audit_id>/steps", methods=["GET"])
