@@ -68,14 +68,10 @@ def safe_parse(s: str):
         return json.loads(s)
     except Exception:
         return s
-
-# -------------------------
-# Media Processing Worker
-# -------------------------
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
     """Background processor for any uploaded media (photo, video, or audio)."""
-    from openai import OpenAI
     import base64, traceback
+    from openai import OpenAI
 
     client = OpenAI()
 
@@ -87,14 +83,14 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
             return
 
         try:
-            # --- Handle PHOTO / VIDEO ---
+            # --- PHOTO / VIDEO ---
             if media_type in ["photo", "video"]:
                 print(f"🖼 Processing {media_type} for step {step.id}")
                 with open(local_path, "rb") as f:
                     img_b64 = base64.b64encode(f.read()).decode("utf-8")
                 context = {"type": "image", "b64": img_b64}
 
-                # Map to schema based on step_type
+                # Run analysis using appropriate schema
                 schema_map = {
                     "exterior": ExteriorSidingSchema,
                     "hvac": HVACSchema,
@@ -105,7 +101,6 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 if not schema_cls:
                     raise ValueError(f"No schema for step_type={step.step_type}")
 
-                # Run AI agent for photo/video analysis
                 parsed = run_agent(
                     domain=step.step_type,
                     context=context,
@@ -113,12 +108,23 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                     mode="media",
                 )
 
+                # Save AI summary result to the step
                 step.ai_summary = parsed
-                step.status = "Completed"
+
+                # ✅ Check if all non-audio media for this step have finished processing
+                unprocessed_media = AuditMedia.query.filter(
+                    AuditMedia.step_id == step.id,
+                    AuditMedia.media_type.in_(["photo", "video"]),
+                    AuditMedia.notes.like("%Processing%")
+                ).count()
+
+                if unprocessed_media == 0:
+                    step.status = "Completed"
+
                 db.session.commit()
                 print(f"✅ [process_media_async] Completed {media_type} for step {step.id}")
 
-            # --- Handle AUDIO ---
+            # --- AUDIO ---
             elif media_type == "audio":
                 print(f"🎧 Transcribing and summarizing audio for step {step.id}")
 
@@ -144,7 +150,7 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 ]
 
                 if transcripts:
-                    # 3️⃣ Generic energy-audit-aware summarization
+                    # 3️⃣ Summarize all transcripts into one step-level narrative
                     summarization_prompt = f"""
 You are an expert residential energy auditor assistant. You will be given one or more audio transcripts 
 recorded during a home energy audit.
@@ -182,7 +188,6 @@ Now summarize the following transcripts:
                         traceback.print_exc()
                         summary = "\n".join(transcripts)
 
-                    # Save summary to step
                     step.summary = summary
                     step.status = "Completed"
                     db.session.commit()
@@ -337,10 +342,7 @@ def delete_media(media_id):
 @bp.route('/steps/<int:step_id>/upload', methods=['POST'])
 def upload_media_by_step_id(step_id):
     """Upload photo or audio directly to a specific step_id"""
-    from routes.media_routes import _guess_content_type, _upload_to_supabase_bytes, process_media_async
-    import tempfile, os, subprocess
-    from flask import current_app
-    from threading import Thread
+    
 
     file = request.files.get('file')
     if not file:
@@ -353,6 +355,9 @@ def upload_media_by_step_id(step_id):
     if not step:
         return jsonify({'error': 'Step not found'}), 404
 
+    # 🔄 Mark the step as "Processing" immediately for all uploads
+    step.status = "Processing"
+    db.session.commit()
     filename = f"{step.audit_id}_{step.label}_{file.filename}"
     tmp_path = os.path.join(tempfile.gettempdir(), filename)
     file.save(tmp_path)
