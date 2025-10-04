@@ -42,7 +42,6 @@ def serialize_step(step):
         ],
     }
 
-# --- Create or update an audit step ---
 @bp.route('/audits/<int:audit_id>/steps', methods=['POST'])
 def create_or_update_audit_step(audit_id):
     data = request.get_json()
@@ -54,44 +53,47 @@ def create_or_update_audit_step(audit_id):
     if not step_id and (not step_type or not label):
         return jsonify({'error': 'Missing step_type or label'}), 400
 
-    # --- Update existing step ---
+    # --- UPDATE existing step ---
     if step_id:
         step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
         if not step:
             return jsonify({'error': 'Step not found'}), 404
 
-        notes_data = parse_meta(step.meta)
+        # Safely load JSONB meta (never overwrite it fully)
+        notes_data = step.meta.copy() if isinstance(step.meta, dict) else {}
 
+        # Update meta fields for exterior steps
         if step.step_type == "exterior":
             if "orientation" in data:
                 notes_data["orientation"] = data["orientation"]
-                step.label = data["orientation"]  # sync label to orientation
+                step.label = data["orientation"]  # keep label matching orientation
             if "siding_material" in data:
                 notes_data["siding_material"] = data["siding_material"]
             if "rooms" in data:
                 notes_data["rooms"] = data["rooms"]
 
-        if "notes" in data and isinstance(data["notes"], dict):
+        # Merge any extra notes explicitly passed in
+        if isinstance(data.get("notes"), dict):
             notes_data.update(data["notes"])
 
+        # Apply other updates
         if "label" in data and not data.get("orientation"):
             step.label = data["label"]
-
         if "status" in data:
             step.status = status
-
-        step.meta = notes_data
         if "summary" in data:
             step.summary = data["summary"]
         if "ai_summary" in data:
             step.ai_summary = data["ai_summary"]
 
+        # ✅ assign merged meta and commit
+        step.meta = notes_data
         db.session.commit()
-        return jsonify(serialize_step(step)), 200
+        return jsonify({"message": "Step updated", "id": step.id, "meta": step.meta}), 200
 
-    # --- Create new step ---
+    # --- CREATE new step if it doesn’t exist ---
     step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
-    notes_data = step.meta if step else {}
+    notes_data = step.meta.copy() if step and isinstance(step.meta, dict) else {}
 
     if step_type == "exterior":
         if "orientation" in data:
@@ -101,32 +103,29 @@ def create_or_update_audit_step(audit_id):
         if "rooms" in data:
             notes_data["rooms"] = data["rooms"]
 
-    if "notes" in data and isinstance(data["notes"], dict):
+    if isinstance(data.get("notes"), dict):
         notes_data.update(data["notes"])
 
     if step:
-        if status:
-            step.status = status
+        step.status = status or step.status
         step.meta = notes_data
-        if "summary" in data:
-            step.summary = data["summary"]
-        if "ai_summary" in data:
-            step.ai_summary = data["ai_summary"]
+        step.summary = data.get("summary", step.summary)
+        step.ai_summary = data.get("ai_summary", step.ai_summary)
         db.session.commit()
-        return jsonify(serialize_step(step)), 200
-    else:
-        new_step = AuditStep(
-            audit_id=audit_id,
-            step_type=step_type,
-            label=label,
-            status=status or "Not Started",
-            meta=notes_data,
-            summary=data.get("summary"),
-            ai_summary=data.get("ai_summary"),
-        )
-        db.session.add(new_step)
-        db.session.commit()
-        return jsonify(serialize_step(new_step)), 201
+        return jsonify({"message": "Step updated", "id": step.id, "meta": step.meta}), 200
+
+    new_step = AuditStep(
+        audit_id=audit_id,
+        step_type=step_type,
+        label=label,
+        status=status or "Not Started",
+        meta=notes_data,
+        summary=data.get("summary"),
+        ai_summary=data.get("ai_summary"),
+    )
+    db.session.add(new_step)
+    db.session.commit()
+    return jsonify({"message": "Step created", "id": new_step.id, "meta": new_step.meta}), 201
 
 # --- Get all steps for an audit ---
 @bp.route("/audits/<int:audit_id>/steps", methods=["GET"])
