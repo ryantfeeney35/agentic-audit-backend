@@ -96,6 +96,7 @@ def get_audit(audit_id):
                 "step_type": step.step_type,
                 "label": step.label,
                 "status": step.status,
+                "ai_summary": step.ai_summary,    # 👈 make sure this line exists
                 "summary": step.summary
             }
             for step in audit.steps

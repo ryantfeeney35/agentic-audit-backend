@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from supabase import create_client
 from openai import OpenAI
+import traceback
 
 from models import AuditMedia, AuditStep, db
 from agents.base_agent import run_agent
@@ -70,8 +71,6 @@ def safe_parse(s: str):
         return s
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
     """Background processor for any uploaded media (photo, video, or audio)."""
-    import base64, traceback
-    from openai import OpenAI
 
     client = OpenAI()
 
@@ -110,16 +109,6 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
 
                 # Save AI summary result to the step
                 step.ai_summary = parsed
-
-                # ✅ Check if all non-audio media for this step have finished processing
-                unprocessed_media = AuditMedia.query.filter(
-                    AuditMedia.step_id == step.id,
-                    AuditMedia.media_type.in_(["photo", "video"]),
-                    AuditMedia.notes.like("%Processing%")
-                ).count()
-
-                if unprocessed_media == 0:
-                    step.status = "Completed"
 
                 db.session.commit()
                 print(f"✅ [process_media_async] Completed {media_type} for step {step.id}")
@@ -187,13 +176,15 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                         print(f"⚠️ Summarization failed: {e}")
                         traceback.print_exc()
                         summary = "\n".join(transcripts)
+                        step.summary = summary
+                        db.session.commit()
 
                     
                     print(f"✅ [process_media_async] Audio summary saved for step {step.id}")
 
             else:
                 raise ValueError(f"Unsupported media type: {media_type}")
-            step.summary = summary
+            
             step.status = "Completed"
             db.session.commit()
 
