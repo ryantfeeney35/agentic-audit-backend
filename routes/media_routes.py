@@ -152,27 +152,27 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 if transcripts:
                     # 3️⃣ Summarize all transcripts into one step-level narrative
                     summarization_prompt = f"""
-You are an expert residential energy auditor assistant. You will be given one or more audio transcripts 
-recorded during a home energy audit.
+                            You are an expert residential energy auditor assistant. You will be given one or more audio transcripts 
+                            recorded during a home energy audit.
 
-The recordings may include:
-- Homeowner interviews
-- Auditor field observations (exterior, insulation, HVAC, etc.)
-- Verbal notes describing site conditions, comfort issues, or improvement opportunities
+                            The recordings may include:
+                            - Homeowner interviews
+                            - Auditor field observations (exterior, insulation, HVAC, etc.)
+                            - Verbal notes describing site conditions, comfort issues, or improvement opportunities
 
-Your task:
-- Summarize the combined content clearly and professionally.
-- Focus on relevant findings, comfort complaints, and upgrade opportunities.
-- Include contextual clues (e.g., "North exterior wall shows…" or "Auditor noted attic insulation gaps").
-- Write in a factual, concise narrative suitable for an audit report.
-- Do NOT infer or add unspoken details.
+                            Your task:
+                            - Summarize the combined content clearly and professionally.
+                            - Focus on relevant findings, comfort complaints, and upgrade opportunities.
+                            - Include contextual clues (e.g., "North exterior wall shows…" or "Auditor noted attic insulation gaps").
+                            - Write in a factual, concise narrative suitable for an audit report.
+                            - Do NOT infer or add unspoken details.
 
-Step context:
-- Step type: {step.step_type or "unknown"}
-- Step label: {step.label or "unspecified"}
+                            Step context:
+                            - Step type: {step.step_type or "unknown"}
+                            - Step label: {step.label or "unspecified"}
 
-Now summarize the following transcripts:
-"""
+                            Now summarize the following transcripts:
+                            """
 
                     try:
                         response = client.chat.completions.create(
@@ -188,13 +188,14 @@ Now summarize the following transcripts:
                         traceback.print_exc()
                         summary = "\n".join(transcripts)
 
-                    step.summary = summary
-                    step.status = "Completed"
-                    db.session.commit()
+                    
                     print(f"✅ [process_media_async] Audio summary saved for step {step.id}")
 
             else:
                 raise ValueError(f"Unsupported media type: {media_type}")
+            step.summary = summary
+            step.status = "Completed"
+            db.session.commit()
 
         except Exception as e:
             print(f"❌ [process_media_async] Failed: {e}")
