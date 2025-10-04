@@ -172,6 +172,7 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                             ],
                         )
                         summary = response.choices[0].message.content.strip()
+                        step.summary = summary
                         db.session.commit()
                     except Exception as e:
                         print(f"⚠️ Summarization failed: {e}")
