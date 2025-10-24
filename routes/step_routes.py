@@ -60,14 +60,13 @@ def create_or_update_audit_step(audit_id):
         if not step:
             return jsonify({"error": "Step not found"}), 404
 
-        # Load current meta safely
         notes_data = step.meta.copy() if isinstance(step.meta, dict) else {}
 
-        # ✅ Allow meta updates for ALL step types
+        # ✅ Merge any generic meta fields
         if "meta" in data and isinstance(data["meta"], dict):
             notes_data.update(data["meta"])
 
-        # Preserve exterior-specific field support
+        # --- Handle exterior fields ---
         if step.step_type == "exterior":
             if "orientation" in data:
                 notes_data["orientation"] = data["orientation"]
@@ -77,10 +76,20 @@ def create_or_update_audit_step(audit_id):
             if "rooms" in data:
                 notes_data["rooms"] = data["rooms"]
 
+        # --- Handle interior fields (room) ---
+        if step.step_type == "interior":
+            if "room_type" in data:
+                notes_data["room_type"] = data["room_type"]
+                step.label = data["room_type"]
+            if "ceiling_height" in data:
+                notes_data["ceiling_height"] = data["ceiling_height"]
+            if "ceiling_material" in data:
+                notes_data["ceiling_material"] = data["ceiling_material"]
+
         if "notes" in data and isinstance(data["notes"], dict):
             notes_data.update(data["notes"])
 
-        if "label" in data and not data.get("orientation"):
+        if "label" in data and step_type != "exterior":
             step.label = data["label"]
         if "status" in data:
             step.status = status
@@ -97,10 +106,10 @@ def create_or_update_audit_step(audit_id):
     step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
     notes_data = step.meta.copy() if step and isinstance(step.meta, dict) else {}
 
-    # ✅ Also merge incoming meta for creation
     if "meta" in data and isinstance(data["meta"], dict):
         notes_data.update(data["meta"])
 
+    # --- Handle exterior meta ---
     if step_type == "exterior":
         if "orientation" in data:
             notes_data["orientation"] = data["orientation"]
@@ -108,6 +117,15 @@ def create_or_update_audit_step(audit_id):
             notes_data["siding_material"] = data["siding_material"]
         if "rooms" in data:
             notes_data["rooms"] = data["rooms"]
+
+    # --- Handle interior meta ---
+    if step_type == "interior":
+        if "room_type" in data:
+            notes_data["room_type"] = data["room_type"]
+        if "ceiling_height" in data:
+            notes_data["ceiling_height"] = data["ceiling_height"]
+        if "ceiling_material" in data:
+            notes_data["ceiling_material"] = data["ceiling_material"]
 
     if "notes" in data and isinstance(data["notes"], dict):
         notes_data.update(data["notes"])
