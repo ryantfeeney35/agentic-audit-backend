@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
     ExteriorSidingSchema,
+    InteriorRoomSchema,
     HVACSchema,
     InsulationSchema,
     InterviewSchema,
@@ -23,6 +24,7 @@ MEDIA_SCHEMAS = {
     "hvac": HVACSchema,
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
+    "interior": InteriorRoomSchema,
 }
 
 
@@ -72,6 +74,13 @@ def run_agent(
                 "- Assess ducting (sealing, insulation, asbestos tape)\n"
                 "- Flag safety/efficiency issues\n"
                 "- Return structured JSON using the HVACMediaOutput schema."
+            )
+        elif domain == "interior":
+            system_instructions = (
+                "You are the Interior Agent (CREIA protocol).\n"
+                "- Identify room type, ceiling height, and ceiling material\n"
+                "- Highlight comfort/efficiency impacts\n"
+                "- Return structured JSON using the InteriorMediaOutput schema."
             )
         else:  # exterior
             system_instructions = (

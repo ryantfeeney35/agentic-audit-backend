@@ -23,6 +23,13 @@ class ExteriorSidingSchema(BaseModel):
     ea_analysis: str
     summary: str
 
+class InteriorRoomSchema(BaseModel):
+    room_type: str
+    ceiling_height: str
+    ceiling_material: str
+    ea_analysis: str
+    summary: str
+
 class HVACSchema(BaseModel):
     # 🔹 Core system details
     system_type: str = Field(
