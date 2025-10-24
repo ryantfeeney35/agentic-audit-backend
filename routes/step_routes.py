@@ -23,9 +23,14 @@ def serialize_step(step):
         "label": step.label,
         "step_type": step.step_type,
         "status": step.status,
+        #exterior specific fields
         "orientation": notes_data.get("orientation") if step.step_type == "exterior" else None,
         "siding_material": notes_data.get("siding_material") if step.step_type == "exterior" else None,
         "rooms": notes_data.get("rooms") if step.step_type == "exterior" else None,
+        #interior specific fields
+        "room_type": notes_data.get("room_type") if step.step_type == "interior" else None,
+        "ceiling_height": notes_data.get("ceiling_height") if step.step_type == "interior" else None,
+        "ceiling_material": notes_data.get("ceiling_material") if step.step_type == "interior" else None,
         "meta": notes_data,
         "summary": step.summary,
         "ai_summary": step.ai_summary,
