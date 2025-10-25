@@ -32,6 +32,10 @@ def serialize_step(step):
         "room_type": notes_data.get("room_type") if step.step_type == "interior" else None,
         "ceiling_height": notes_data.get("ceiling_height") if step.step_type == "interior" else None,
         "ceiling_material": notes_data.get("ceiling_material") if step.step_type == "interior" else None,
+        #insulation specific fields
+        "quality": notes_data.get("quality") if step.step_type == "insulation" else None,
+        "thickness": notes_data.get("thickness") if step.step_type == "insulation" else None,
+        "area": notes_data.get("area") if step.step_type == "insulation" else None,
         "meta": notes_data,
         "summary": step.summary,
         "ai_summary": step.ai_summary,
@@ -94,6 +98,14 @@ def create_or_update_audit_step(audit_id):
             if "ceiling_material" in data:
                 notes_data["ceiling_material"] = data["ceiling_material"]
 
+        # --- Handle insulation fields ---
+        if step.step_type == "insulation":
+            if "quality" in data:
+                notes_data["quality"] = data["quality"]
+            if "thickness" in data:
+                notes_data["thickness"] = data["thickness"]
+            if "area" in data:
+                notes_data["area"] = data["area"]
         if "notes" in data and isinstance(data["notes"], dict):
             notes_data.update(data["notes"])
 
@@ -136,6 +148,15 @@ def create_or_update_audit_step(audit_id):
             notes_data["ceiling_height"] = data["ceiling_height"]
         if "ceiling_material" in data:
             notes_data["ceiling_material"] = data["ceiling_material"]
+
+    # --- Handle insulation fields ---
+    if step_type == "insulation":
+        if "quality" in data:
+            notes_data["quality"] = data["quality"]
+        if "thickness" in data:
+            notes_data["thickness"] = data["thickness"]
+        if "area" in data:
+            notes_data["area"] = data["area"]
 
     if "notes" in data and isinstance(data["notes"], dict):
         notes_data.update(data["notes"])
