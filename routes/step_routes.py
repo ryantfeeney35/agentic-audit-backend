@@ -26,6 +26,7 @@ def serialize_step(step):
         #exterior specific fields
         "orientation": notes_data.get("orientation") if step.step_type == "exterior" else None,
         "siding_material": notes_data.get("siding_material") if step.step_type == "exterior" else None,
+        "house_side": notes_data.get("house_side") if step.step_type == "exterior" else None,
         "rooms": notes_data.get("rooms") if step.step_type == "exterior" else None,
         #interior specific fields
         "room_type": notes_data.get("room_type") if step.step_type == "interior" else None,
@@ -78,6 +79,8 @@ def create_or_update_audit_step(audit_id):
                 step.label = data["orientation"]
             if "siding_material" in data:
                 notes_data["siding_material"] = data["siding_material"]
+            if "house_side" in data:
+                notes_data["house_side"] = data["house_side"]
             if "rooms" in data:
                 notes_data["rooms"] = data["rooms"]
 
@@ -120,6 +123,8 @@ def create_or_update_audit_step(audit_id):
             notes_data["orientation"] = data["orientation"]
         if "siding_material" in data:
             notes_data["siding_material"] = data["siding_material"]
+        if "house_side" in data:
+            notes_data["house_side"] = data["house_side"]
         if "rooms" in data:
             notes_data["rooms"] = data["rooms"]
 
