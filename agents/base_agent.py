@@ -1,7 +1,7 @@
 import logging
 import base64
 import json
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,

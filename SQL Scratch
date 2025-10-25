@@ -28,13 +28,13 @@ delete from audit_steps;
 delete from audit_media where audit_media.media_type = 'document'
 delete from agent_conversations where id > 64
 delete from audit_recommendations;
-delete from audit_steps WHERE audit_id = 32
+delete from audit_steps WHERE id = 279
 
 
 ALTER TABLE audits ADD COLUMN IF NOT EXISTS audit_type TEXT;
 select * from properties;
-select * from audits WHERE property_id = 59;
-select * from audit_steps WHERE audit_id = 38;
+select * from audits WHERE property_id = 37;
+select * from audit_steps WHERE audit_id = 22;
 select * from audit_media WHERE audit_id = 38;
 select id, file_name, summary, created_at 
 from audit_media 
