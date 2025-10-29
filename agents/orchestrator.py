@@ -201,6 +201,7 @@ class OrchestratorAgent:
         Returns a dict with status and summary_override on success.
         """
         try:
+            logger.info("process_recommendation_audio: start rec_id=%s audit_id=%s media_url=%s", rec_id, self.audit_id, media_url)
             rec = AuditRecommendation.query.get(rec_id)
             if not rec:
                 logger.error("process_recommendation_audio: recommendation %s not found", rec_id)
@@ -219,7 +220,9 @@ class OrchestratorAgent:
                 try:
                     resp = urlopen(media_url)
                     with open(tmp_path, "wb") as f:
-                        f.write(resp.read())
+                        data = resp.read()
+                        f.write(data)
+                    logger.info("process_recommendation_audio: downloaded media to %s (%d bytes)", tmp_path, len(data))
                 except Exception:
                     logger.exception("Failed to download media_url for recommendation audio")
                     return {"status": "error", "error": "download_failed"}
@@ -229,6 +232,7 @@ class OrchestratorAgent:
                 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
                 with open(tmp_path, "rb") as fh:
                     transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                logger.info("process_recommendation_audio: transcription complete (len=%d)", len(transcript) if transcript else 0)
             except Exception as e:
                 logger.exception("Transcription failed: %s", e)
                 # keep transcript empty on failure
@@ -240,11 +244,14 @@ class OrchestratorAgent:
             # Run the domain agent in media mode with the transcript and the original AI summary as context
             try:
                 context = {"type": "audio", "transcript": transcript, "rec_summary": rec.summary}
+                logger.info("process_recommendation_audio: calling run_agent domain=%s audit_id=%s", domain, self.audit_id)
                 parsed = run_agent(domain, context, audit_id=self.audit_id, mode="media")
+                logger.info("process_recommendation_audio: run_agent returned keys=%s", list(parsed.keys()) if isinstance(parsed, dict) else type(parsed))
                 refined = None
                 if isinstance(parsed, dict):
                     # many media schemas include a `summary` field
                     refined = parsed.get("summary") or parsed.get("refined_text")
+                    logger.info("process_recommendation_audio: refined length=%s", len(refined) if refined else 0)
             except Exception as e:
                 logger.exception("Agent refinement failed: %s", e)
                 refined = None
@@ -253,6 +260,7 @@ class OrchestratorAgent:
             try:
                 rec.summary_override = refined or (transcript if transcript else None)
                 db.session.commit()
+                logger.info("process_recommendation_audio: persisted summary_override for rec_id=%s (len=%s)", rec_id, len(rec.summary_override) if rec.summary_override else 0)
             except Exception as e:
                 db.session.rollback()
                 logger.exception("Failed to persist summary_override: %s", e)
