@@ -102,6 +102,8 @@ class AuditRecommendation(db.Model):
     annual_savings_usd = db.Column(db.Float)
     upgrade_cost_usd = db.Column(db.Float)
     payback_years = db.Column(db.Float)
+    # Optional integer to allow auditors to persist a custom display order.
+    display_order = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     audit = relationship("Audit", back_populates="recommendations")
