@@ -243,17 +243,34 @@ class OrchestratorAgent:
 
             # Run the domain agent in media mode with the transcript and the original AI summary as context
             try:
-                context = {"type": "audio", "transcript": transcript, "rec_summary": rec.summary}
-                logger.info("process_recommendation_audio: calling run_agent domain=%s audit_id=%s", domain, self.audit_id)
-                parsed = run_agent(domain, context, audit_id=self.audit_id, mode="media")
-                logger.info("process_recommendation_audio: run_agent returned keys=%s", list(parsed.keys()) if isinstance(parsed, dict) else type(parsed))
+                # Use the recommendations mode to ask the agent to professionalize the transcript
+                # into a single concise recommendation summary. This avoids media-mode behavior
+                # that asks for additional diagnostic details.
+                prompt = (
+                    "You will be given an auditor's transcript. Your job is to produce ONE concise, "
+                    "professional recommendation summary suitable for an audit report. Do NOT ask for more information; "
+                    "if details are missing, produce the best conservative recommendation you can from the transcript.\n\n"
+                    f"Transcript:\n{transcript}\n\n"
+                    f"Existing AI summary (for reference):\n{rec.summary or ''}\n\n"
+                    "Return JSON conforming to AgentOutput and populate only `recommendations` with one item."
+                )
+
+                logger.info("process_recommendation_audio: calling run_agent (recommendations mode) domain=%s audit_id=%s", domain, self.audit_id)
+                parsed = run_agent(domain, prompt, audit_id=self.audit_id, mode="recommendations")
+                logger.info("process_recommendation_audio: run_agent returned type=%s", type(parsed))
+
                 refined = None
                 if isinstance(parsed, dict):
-                    # many media schemas include a `summary` field
-                    refined = parsed.get("summary") or parsed.get("refined_text")
-                    logger.info("process_recommendation_audio: refined length=%s", len(refined) if refined else 0)
+                    recs_list = parsed.get("recommendations") or []
+                    if isinstance(recs_list, list) and len(recs_list) > 0:
+                        first = recs_list[0]
+                        if isinstance(first, dict):
+                            refined = first.get("summary")
+                        elif isinstance(first, str):
+                            refined = first
+                logger.info("process_recommendation_audio: refined length=%s", len(refined) if refined else 0)
             except Exception as e:
-                logger.exception("Agent refinement failed: %s", e)
+                logger.exception("Agent refinement (recommendations mode) failed: %s", e)
                 refined = None
 
             # Persist the override (prefer refined text, fallback to transcript)
