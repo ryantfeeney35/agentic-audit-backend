@@ -1,7 +1,7 @@
 # agents/orchestrator.py
 import logging
 from .base_agent import run_agent
-from .context_builder import build_audit_context
+from .context_builder import build_audit_context, build_audio_context
 from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db
 import tempfile
@@ -122,20 +122,41 @@ class OrchestratorAgent:
     # --- Generate upgrade recommendations ---
     def generate_recommendations(self):
         logger.info("🧮 Generating recommendations (audit_id=%s)", self.audit_id)
-        context = build_audit_context(self.audit_id)
+        # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
+        domains = ["insulation", "siding", "hvac"]
 
-        outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        # --- Pass 1: Audio-derived recommendations ---
+        audio_context = build_audio_context(self.audit_id)
+        logger.info("🔊 Audio pass context length=%d", len(audio_context or ""))
+        audio_outputs = {}
+        for domain in domains:
             try:
-                outputs[domain] = run_agent(domain, context, audit_id=self.audit_id, mode="recommendations")
+                # Pass a keyed dict so tests/mocks can detect audio-pass vs context-pass.
+                audio_outputs[domain] = run_agent(domain, {"type": "audio_pass", "text": audio_context}, audit_id=self.audit_id, mode="recommendations")
             except Exception:
-                logger.exception("❌ %s agent failed during recommendations", domain)
-                outputs[domain] = {}
+                logger.exception("❌ %s agent failed during audio recommendations", domain)
+                audio_outputs[domain] = {}
 
+        # --- Pass 2: Contextual AI recommendations (build full context but existing builder excludes raw audio artifacts) ---
+        context = build_audit_context(self.audit_id)
+        logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
+        context_outputs = {}
+        for domain in domains:
+            try:
+                context_outputs[domain] = run_agent(domain, context, audit_id=self.audit_id, mode="recommendations")
+            except Exception:
+                logger.exception("❌ %s agent failed during contextual recommendations", domain)
+                context_outputs[domain] = {}
+
+        # Merge audio-first then AI context outputs preserving order
         all_recs = []
-        for domain, result in outputs.items():
-            recs = result.get("recommendations") or []
-            for r in recs:
+        for domain in domains:
+            for r in (audio_outputs.get(domain, {}) or {}).get("recommendations", []) or []:
+                r["_source_pass"] = "audio"
+                all_recs.append(r)
+        for domain in domains:
+            for r in (context_outputs.get(domain, {}) or {}).get("recommendations", []) or []:
+                r["_source_pass"] = "ai"
                 all_recs.append(r)
 
         # Coerce numeric fields safely
@@ -185,6 +206,8 @@ class OrchestratorAgent:
                 annual_savings_usd=safe_float(rec.get("annual_savings_usd")),
                 upgrade_cost_usd=safe_float(rec.get("upgrade_cost_usd")),
                 payback_years=safe_float(rec.get("payback_years")),
+                # Persist source (audio | ai). Default to 'ai' when not provided.
+                source=(rec.get("_source_pass") or rec.get("source") or "ai"),
             )
             db.session.add(r)
             saved.append(r)

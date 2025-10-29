@@ -42,3 +42,28 @@ def build_audit_context(audit_id: int) -> str:
 
     # --- Final compiled context string ---
     return "\n".join(context_summary)
+
+
+def build_audio_context(audit_id: int) -> str:
+    """Build a minimal context string derived only from audio artifacts and
+    any auditor refinements to those audio items (e.g. recommendation summary_override).
+
+    This intentionally avoids pulling full property/context data.
+    """
+    from models import AuditMedia, AuditRecommendation
+
+    lines = []
+
+    # Include any recommendation-level human/audio refinements (summary_override)
+    recs = AuditRecommendation.query.filter_by(audit_id=audit_id).all()
+    for r in recs:
+        if r.summary_override:
+            lines.append(f"[Recommendation Override] {r.summary_override}")
+
+    # Include metadata about audio media files attached to the audit (filenames/urls)
+    medias = AuditMedia.query.filter_by(audit_id=audit_id).all()
+    for m in medias:
+        if m.media_type and m.media_type.lower().startswith("audio"):
+            lines.append(f"[Audio File] {m.file_name} - {m.media_url}")
+
+    return "\n".join(lines)

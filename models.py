@@ -109,6 +109,8 @@ class AuditRecommendation(db.Model):
     display_order = db.Column(db.Integer, nullable=True)
     # Allow auditors to hide recommendations without deleting them.
     is_hidden = db.Column(db.Boolean, nullable=False, server_default=sa.text('false'))
+    # Source of recommendation: 'audio' when derived from recorded audio/transcripts, 'ai' otherwise.
+    source = db.Column(db.String, nullable=False, server_default=sa.text("'ai'"))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     audit = relationship("Audit", back_populates="recommendations")
