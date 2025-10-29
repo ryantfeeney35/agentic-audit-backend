@@ -100,6 +100,8 @@ class AuditRecommendation(db.Model):
     audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String(50), nullable=False)
     summary = db.Column(db.Text, nullable=False)
+    # Optional human-refined summary recorded/uploaded by auditors (transcribed + refined)
+    summary_override = db.Column(db.Text, nullable=True)
     annual_savings_usd = db.Column(db.Float)
     upgrade_cost_usd = db.Column(db.Float)
     payback_years = db.Column(db.Float)

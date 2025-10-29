@@ -1,7 +1,12 @@
 # routes/recommendations_routes.py
-from flask import Blueprint, jsonify, request, abort
+from flask import Blueprint, jsonify, request, abort, current_app
 from agents.orchestrator import OrchestratorAgent
 from models import AuditRecommendation, db
+import tempfile
+import os
+from werkzeug.utils import secure_filename
+from threading import Thread
+from supabase_utils import upload_to_supabase_and_get_url
 
 bp = Blueprint("recommendations", __name__)
 
@@ -109,6 +114,7 @@ def serialize_rec(r):
         "id": r.id,
         "step_type": r.step_type,
         "summary": r.summary,
+        "summary_override": getattr(r, "summary_override", None),
         "annual_savings_usd": r.annual_savings_usd,
         "upgrade_cost_usd": r.upgrade_cost_usd,
         "payback_years": r.payback_years,
@@ -116,3 +122,44 @@ def serialize_rec(r):
         "is_hidden": bool(getattr(r, "is_hidden", False)),
         "created_at": r.created_at.isoformat()
     }
+
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/audio", methods=["POST"])
+def upload_recommendation_audio(audit_id, rec_id):
+    """Accept an audio recording for a recommendation, upload to Supabase, and trigger transcription + refinement.
+
+    Returns 202 with processing status and media_url. The orchestrator will update AuditRecommendation.summary_override when complete.
+    """
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    # Accept file under 'audio' form field for clarity
+    file = request.files.get("audio") or request.files.get("file")
+    if not file:
+        abort(400, description="Missing audio file in 'audio' form field")
+
+    filename = secure_filename(f"{audit_id}_rec_{rec_id}_{file.filename}")
+    tmp_dir = tempfile.gettempdir()
+    tmp_path = os.path.join(tmp_dir, filename)
+    file.save(tmp_path)
+
+    # Upload to Supabase (uses existing helper)
+    # Use the recommendation step_type as label so files are organized by domain
+    step_label = rec.step_type or f"recommendation_{rec_id}"
+    media_url = upload_to_supabase_and_get_url(tmp_path, audit_id, step_label, media_type="audio", step_type=rec.step_type)
+    if not media_url:
+        abort(500, description="Failed to upload audio to storage")
+
+    # Trigger async processing by the orchestrator (do not block the request)
+    def _process():
+        try:
+            agent = OrchestratorAgent(audit_id)
+            agent.process_recommendation_audio(rec_id, media_url, local_path=tmp_path)
+        except Exception as e:
+            current_app.logger.exception("Failed to process recommendation audio: %s", e)
+
+    Thread(target=_process).start()
+
+    return jsonify({"status": "processing", "media_url": media_url}), 202

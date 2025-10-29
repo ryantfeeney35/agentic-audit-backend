@@ -4,6 +4,11 @@ from .base_agent import run_agent
 from .context_builder import build_audit_context
 from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db
+import tempfile
+import os
+import traceback
+from openai import OpenAI
+from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -187,3 +192,74 @@ class OrchestratorAgent:
 
         logger.info("💾 Saved %d recommendations.", len(saved))
         return saved
+
+    def process_recommendation_audio(self, rec_id: int, media_url: str, local_path: str | None = None) -> dict:
+        """Transcribe an uploaded recommendation audio file, run the domain agent to refine it,
+        and persist the result to AuditRecommendation.summary_override.
+
+        This method is safe to call asynchronously (it commits its own DB changes).
+        Returns a dict with status and summary_override on success.
+        """
+        try:
+            rec = AuditRecommendation.query.get(rec_id)
+            if not rec:
+                logger.error("process_recommendation_audio: recommendation %s not found", rec_id)
+                return {"status": "error", "error": "recommendation_not_found"}
+
+            if rec.audit_id != self.audit_id:
+                logger.error("process_recommendation_audio: audit_id mismatch (expected %s, got %s)", self.audit_id, rec.audit_id)
+                return {"status": "error", "error": "audit_id_mismatch"}
+
+            # Ensure we have a local file to transcribe
+            tmp_path = local_path
+            if not tmp_path:
+                # Download the file
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=os.path.basename(media_url))
+                os.close(tmp_fd)
+                try:
+                    resp = urlopen(media_url)
+                    with open(tmp_path, "wb") as f:
+                        f.write(resp.read())
+                except Exception:
+                    logger.exception("Failed to download media_url for recommendation audio")
+                    return {"status": "error", "error": "download_failed"}
+
+            # Transcribe using OpenAI speech-to-text helper (same model used elsewhere)
+            try:
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                with open(tmp_path, "rb") as fh:
+                    transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+            except Exception as e:
+                logger.exception("Transcription failed: %s", e)
+                # keep transcript empty on failure
+                transcript = ""
+
+            # Choose domain based on recommendation.step_type (normalize to lowercase)
+            domain = (rec.step_type or "general").lower()
+
+            # Run the domain agent in media mode with the transcript and the original AI summary as context
+            try:
+                context = {"type": "audio", "transcript": transcript, "rec_summary": rec.summary}
+                parsed = run_agent(domain, context, audit_id=self.audit_id, mode="media")
+                refined = None
+                if isinstance(parsed, dict):
+                    # many media schemas include a `summary` field
+                    refined = parsed.get("summary") or parsed.get("refined_text")
+            except Exception as e:
+                logger.exception("Agent refinement failed: %s", e)
+                refined = None
+
+            # Persist the override (prefer refined text, fallback to transcript)
+            try:
+                rec.summary_override = refined or (transcript if transcript else None)
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                logger.exception("Failed to persist summary_override: %s", e)
+                return {"status": "error", "error": "db_commit_failed"}
+
+            return {"status": "ok", "summary_override": rec.summary_override}
+
+        except Exception as e:
+            logger.exception("Unexpected error in process_recommendation_audio: %s", e)
+            return {"status": "error", "error": "unexpected", "detail": str(e)}
