@@ -4,10 +4,10 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 class StepType(str, Enum):
-    EXTERIOR = "exterior"
-    INTERIOR = "interior"
-    HVAC = "hvac"
-    INSULATION = "insulation"
+    EXTERIOR = "Exterior"
+    INTERIOR = "Interior"
+    HVAC = "HVAC"
+    INSULATION = "Insulation"
 
 # -------------------------
 # Shared structures
