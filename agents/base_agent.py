@@ -1,11 +1,12 @@
 import logging
 import base64
 import json
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
     ExteriorSidingSchema,
+    InteriorRoomSchema,
     HVACSchema,
     InsulationSchema,
     InterviewSchema,
@@ -23,6 +24,7 @@ MEDIA_SCHEMAS = {
     "hvac": HVACSchema,
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
+    "interior": InteriorRoomSchema,
 }
 
 
@@ -73,6 +75,13 @@ def run_agent(
                 "- Flag safety/efficiency issues\n"
                 "- Return structured JSON using the HVACMediaOutput schema."
             )
+        elif domain == "interior":
+            system_instructions = (
+                "You are the Interior Agent (CREIA protocol).\n"
+                "- Identify room type, ceiling height, and ceiling material\n"
+                "- Highlight comfort/efficiency impacts\n"
+                "- Return structured JSON using the InteriorMediaOutput schema."
+            )
         else:  # exterior
             system_instructions = (
                 "You are the Exterior Agent (CREIA protocol).\n"
@@ -92,6 +101,7 @@ def run_agent(
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Always return JSON conforming to AgentOutput.\n"
+            "- Recommendation type should be appropriate for the domain ({domain})\n"
             "- Populate ONLY `recommendations`."
         )
     else:  # followup

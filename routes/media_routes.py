@@ -13,7 +13,7 @@ import traceback
 
 from models import AuditMedia, AuditStep, db
 from agents.base_agent import run_agent
-from agents.schemas import ExteriorSidingSchema, HVACSchema, InsulationSchema, InterviewSchema
+from agents.schemas import ExteriorSidingSchema, HVACSchema, InsulationSchema, InterviewSchema, InteriorRoomSchema
 
 bp = Blueprint("media", __name__)
 
@@ -136,6 +136,7 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                     "hvac": HVACSchema,
                     "insulation": InsulationSchema,
                     "interview": InterviewSchema,
+                    "interior": InteriorRoomSchema,
                 }
                 schema_cls = schema_map.get(step.step_type)
                 if not schema_cls:

@@ -2,6 +2,7 @@
 import logging
 from .base_agent import run_agent
 from .context_builder import build_audit_context
+from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db
 
 logger = logging.getLogger(__name__)
@@ -145,10 +146,36 @@ class OrchestratorAgent:
         saved = []
         for rec in all_recs:
             summary = rec.get("summary", "")
-            step_type = rec.get("step_type", domain)
+            raw_step = rec.get("step_type", domain)
+
+            # Normalize step_type: accept StepType enum members or strings like 'exterior'/'Exterior'/'EXTERIOR'
+            def _normalize_step(s):
+                # If it's already a StepType enum member, return its value
+                try:
+                    if isinstance(s, StepType):
+                        return s.value
+                except Exception:
+                    pass
+                # If it's a string, try to match by name or value (case-insensitive)
+                if isinstance(s, str):
+                    s_str = s.strip()
+                    # try name lookup (e.g., 'exterior' -> EXTERIOR)
+                    try:
+                        return StepType[s_str.upper()].value
+                    except KeyError:
+                        # try matching by value case-insensitively
+                        for m in StepType:
+                            if m.value.lower() == s_str.lower():
+                                return m.value
+                    # fallback: title-case the string
+                    return s_str.title()
+                # any other type: stringify
+                return str(s)
+
+            step_type = _normalize_step(raw_step)
             r = AuditRecommendation(
                 audit_id=self.audit_id,
-                step_type=str(step_type or "general"),
+                step_type=step_type or "General",
                 summary=str(summary or ""),
                 annual_savings_usd=safe_float(rec.get("annual_savings_usd")),
                 upgrade_cost_usd=safe_float(rec.get("upgrade_cost_usd")),

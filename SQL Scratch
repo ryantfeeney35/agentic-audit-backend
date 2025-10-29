@@ -23,20 +23,30 @@ VALUES
 DROP TABLE properties;
 
 delete from properties;
-delete from audits;
+delete from audits where property_id = 36
 delete from audit_steps;
 delete from audit_media where audit_media.media_type = 'document'
 delete from agent_conversations where id > 64
+delete from audit_recommendations;
+delete from audit_steps WHERE id = 279
 
+
+ALTER TABLE audits ADD COLUMN IF NOT EXISTS audit_type TEXT;
 select * from properties;
-select * from audits;
-select * from audit_steps;
-select * from audit_media;
+select * from audits WHERE property_id = 37;
+select * from audit_steps WHERE audit_id = 22;
+select * from audit_media WHERE audit_id = 38;
 select id, file_name, summary, created_at 
 from audit_media 
 where audit_id=19 and step_type='exterior';
 select * from agent_conversations order by created_at;
-This image shows the exterior side of a residential building, including part of the wall, roof, and a metal mesh gate. Observable details relevant to an energy audit:- The exterior wall has a textured stucco finish.- There is visible electrical conduit mounted on the wall.- The roof has rain gutters and a downspout running vertically along the wall. The downspout directs water into a black extension at the base.- There appears to be vegetation and some plant growth at ground level near the foundation.- The area between buildings is open and shows a dirt/grass strip.- The wall’s condition appears intact with no visible cracks or significant deterioration. The window appears to be single- or double-pane but is not clearly visible for further
-select * from audits;
+select distinct step_type from audit_steps where audit_id = 28;
+select id, step_id, summary from audit_media where audit_id = 28;
+select * from audit_recommendations;
 
-select * from audit_media;
+INSERT INTO contractors (name, contact, step_type)
+VALUES 
+('Insulation Pros Inc.', '555-123-4567', 'insulation'),
+('EcoComfort Insulation', '555-987-6543', 'insulation'),
+('Cool & Heat Solutions', '555-111-2222', 'hvac'),
+('Shading & Awnings Co.', '555-555-1212', 'exterior');
