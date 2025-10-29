@@ -266,6 +266,14 @@ class OrchestratorAgent:
                 logger.exception("Failed to persist summary_override: %s", e)
                 return {"status": "error", "error": "db_commit_failed"}
 
+            # cleanup downloaded temp file if we created one
+            try:
+                if local_path and os.path.exists(local_path):
+                    os.remove(local_path)
+                    logger.info("process_recommendation_audio: removed temp file %s", local_path)
+            except Exception:
+                logger.exception("Failed to remove temp audio file: %s", local_path)
+
             return {"status": "ok", "summary_override": rec.summary_override}
 
         except Exception as e:

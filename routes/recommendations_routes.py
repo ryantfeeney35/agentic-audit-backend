@@ -153,13 +153,15 @@ def upload_recommendation_audio(audit_id, rec_id):
         abort(500, description="Failed to upload audio to storage")
 
     # Trigger async processing by the orchestrator (do not block the request)
-    def _process():
-        try:
-            agent = OrchestratorAgent(audit_id)
-            agent.process_recommendation_audio(rec_id, media_url, local_path=tmp_path)
-        except Exception as e:
-            current_app.logger.exception("Failed to process recommendation audio: %s", e)
+    def _process(app):
+        # run inside the Flask application context so DB/session works
+        with app.app_context():
+            try:
+                agent = OrchestratorAgent(audit_id)
+                agent.process_recommendation_audio(rec_id, media_url, local_path=tmp_path)
+            except Exception as e:
+                app.logger.exception("Failed to process recommendation audio: %s", e)
 
-    Thread(target=_process).start()
+    Thread(target=_process, args=(current_app._get_current_object(),)).start()
 
     return jsonify({"status": "processing", "media_url": media_url}), 202
