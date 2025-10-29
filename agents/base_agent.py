@@ -101,6 +101,7 @@ def run_agent(
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Always return JSON conforming to AgentOutput.\n"
+            "- Recommendation type should be appropriate for the domain ({domain})\n"
             "- Populate ONLY `recommendations`."
         )
     else:  # followup

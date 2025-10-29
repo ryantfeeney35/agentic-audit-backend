@@ -1,12 +1,19 @@
 # agents/schemas.py
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import List, Optional
+
+class StepType(str, Enum):
+    EXTERIOR = "exterior"
+    INTERIOR = "interior"
+    HVAC = "hvac"
+    INSULATION = "insulation"
 
 # -------------------------
 # Shared structures
 # -------------------------
 class Recommendation(BaseModel):
-    step_type: str
+    step_type: StepType
     summary: str
     annual_savings_usd: Optional[float]
     upgrade_cost_usd: Optional[float]
