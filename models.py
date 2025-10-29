@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
 
 db = SQLAlchemy()
@@ -104,6 +105,8 @@ class AuditRecommendation(db.Model):
     payback_years = db.Column(db.Float)
     # Optional integer to allow auditors to persist a custom display order.
     display_order = db.Column(db.Integer, nullable=True)
+    # Allow auditors to hide recommendations without deleting them.
+    is_hidden = db.Column(db.Boolean, nullable=False, server_default=sa.text('false'))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     audit = relationship("Audit", back_populates="recommendations")

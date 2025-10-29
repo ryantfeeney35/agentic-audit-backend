@@ -7,18 +7,29 @@ bp = Blueprint("recommendations", __name__)
 
 @bp.route("/audits/<int:audit_id>/recommendations", methods=["GET"])
 def get_recommendations(audit_id):
-    existing = AuditRecommendation.query.filter_by(audit_id=audit_id).all()
-    if existing:
-        # If any recommendation has a display_order set, respect that ordering.
-        if any(r.display_order is not None for r in existing):
-            ordered = sorted(existing, key=lambda r: (r.display_order if r.display_order is not None else 999999))
-        else:
-            # Default to ROI / payback_years ascending when no custom order exists.
-            ordered = sorted(existing, key=lambda r: (r.payback_years if r.payback_years is not None else float("inf")))
-        return jsonify([serialize_rec(r) for r in ordered])
-    agent = OrchestratorAgent(audit_id)
-    saved = agent.generate_recommendations()
-    return jsonify([serialize_rec(r) for r in saved])
+    # Default behavior: exclude hidden recommendations unless include_hidden=true
+    include_hidden = str(request.args.get("include_hidden", "false")).lower() in ("1", "true", "yes")
+
+    # If there are no recommendations at all for the audit, delegate to the agent to generate them.
+    total_recs = AuditRecommendation.query.filter_by(audit_id=audit_id).count()
+    if total_recs == 0:
+        agent = OrchestratorAgent(audit_id)
+        saved = agent.generate_recommendations()
+        return jsonify([serialize_rec(r) for r in saved])
+
+    # Otherwise, load existing recommendations (respect hidden filter)
+    if include_hidden:
+        existing = AuditRecommendation.query.filter_by(audit_id=audit_id).all()
+    else:
+        existing = AuditRecommendation.query.filter_by(audit_id=audit_id, is_hidden=False).all()
+
+    # If any recommendation has a display_order set, respect that ordering.
+    if any(r.display_order is not None for r in existing):
+        ordered = sorted(existing, key=lambda r: (r.display_order if r.display_order is not None else 999999))
+    else:
+        # Default to ROI / payback_years ascending when no custom order exists.
+        ordered = sorted(existing, key=lambda r: (r.payback_years if r.payback_years is not None else float("inf")))
+    return jsonify([serialize_rec(r) for r in ordered])
 
 @bp.route("/audits/<int:audit_id>/recommendations/regenerate", methods=["POST"])
 def regenerate_recommendations(audit_id):
@@ -69,6 +80,30 @@ def patch_recommendations_order(audit_id):
     ordered = sorted(updated, key=lambda r: (r.display_order if r.display_order is not None else 999999))
     return jsonify([serialize_rec(r) for r in ordered])
 
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>", methods=["PATCH"])
+def patch_recommendation(audit_id, rec_id):
+    """Toggle or patch fields on a single recommendation. Currently supports:
+    { "is_hidden": true|false }
+    """
+    payload = request.get_json() or {}
+    if 'is_hidden' not in payload:
+        abort(400, description="Missing 'is_hidden' in request body")
+
+    is_hidden = bool(payload.get('is_hidden'))
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    try:
+        rec.is_hidden = is_hidden
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        abort(500, description=f"Failed to update recommendation: {e}")
+
+    return jsonify(serialize_rec(rec))
+
 def serialize_rec(r):
     return {
         "id": r.id,
@@ -78,5 +113,6 @@ def serialize_rec(r):
         "upgrade_cost_usd": r.upgrade_cost_usd,
         "payback_years": r.payback_years,
         "display_order": r.display_order,
+        "is_hidden": bool(getattr(r, "is_hidden", False)),
         "created_at": r.created_at.isoformat()
     }
