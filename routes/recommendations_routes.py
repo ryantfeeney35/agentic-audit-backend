@@ -15,18 +15,30 @@ def get_recommendations(audit_id):
     # Default behavior: exclude hidden recommendations unless include_hidden=true
     include_hidden = str(request.args.get("include_hidden", "false")).lower() in ("1", "true", "yes")
 
+    # Optional source filter: all (default), audio, ai
+    source = str(request.args.get("source", "all")).lower()
+    if source not in ("all", "audio", "ai"):
+        abort(400, description="Invalid source filter. Allowed: all, audio, ai")
+
     # If there are no recommendations at all for the audit, delegate to the agent to generate them.
     total_recs = AuditRecommendation.query.filter_by(audit_id=audit_id).count()
     if total_recs == 0:
         agent = OrchestratorAgent(audit_id)
         saved = agent.generate_recommendations()
+        # If caller requested a source filter, apply it to the generated results before returning
+        if source != "all":
+            saved = [r for r in saved if (getattr(r, 'source', None) or 'ai').lower() == source]
         return jsonify([serialize_rec(r) for r in saved])
 
     # Otherwise, load existing recommendations (respect hidden filter)
-    if include_hidden:
-        existing = AuditRecommendation.query.filter_by(audit_id=audit_id).all()
-    else:
-        existing = AuditRecommendation.query.filter_by(audit_id=audit_id, is_hidden=False).all()
+    # Build base query
+    q = AuditRecommendation.query.filter_by(audit_id=audit_id)
+    if not include_hidden:
+        q = q.filter_by(is_hidden=False)
+    if source != "all":
+        q = q.filter(AuditRecommendation.source == source)
+
+    existing = q.all()
 
     # If any recommendation has a display_order set, respect that ordering.
     if any(r.display_order is not None for r in existing):
@@ -120,6 +132,7 @@ def serialize_rec(r):
         "payback_years": r.payback_years,
         "display_order": r.display_order,
         "is_hidden": bool(getattr(r, "is_hidden", False)),
+        "source": (getattr(r, "source", None) or "ai"),
         "created_at": r.created_at.isoformat()
     }
 

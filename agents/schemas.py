@@ -18,6 +18,7 @@ class Recommendation(BaseModel):
     annual_savings_usd: Optional[float]
     upgrade_cost_usd: Optional[float]
     payback_years: Optional[float]
+    source: Optional[str] = None
 
 # -------------------------
 # Domain schemas
