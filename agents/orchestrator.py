@@ -56,7 +56,7 @@ class OrchestratorAgent:
         logger.info("📄 Context built (len=%d)", len(context))
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        for domain in ["insulation", "siding", "hvac", "interior"]:
             logger.info("➡️ Dispatching bootstrap to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, context, bootstrap=True, audit_id=self.audit_id)
@@ -97,7 +97,7 @@ class OrchestratorAgent:
         agent_context = f"Conversation so far:\n{history}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        for domain in ["insulation", "siding", "hvac", "interior"]:
             logger.info("➡️ Dispatching follow-up to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, agent_context, bootstrap=False, audit_id=self.audit_id)
@@ -124,7 +124,7 @@ class OrchestratorAgent:
     def generate_recommendations(self):
         logger.info("🧮 Generating recommendations (audit_id=%s)", self.audit_id)
         # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
-        domains = ["insulation", "siding", "hvac"]
+        domains = ["insulation", "siding", "hvac", "interior"]
 
         # --- Pass 1: Audio-derived recommendations ---
         audio_context = build_audio_context(self.audit_id)
@@ -173,10 +173,17 @@ class OrchestratorAgent:
         saved = []
         for rec in all_recs:
             summary = rec.get("summary", "")
-            raw_step = rec.get("step_type", domain)
+            # Prefer an explicit step_type from the agent output; do not
+            # fall back to the outer `domain` variable (which would be the
+            # last loop value). If missing, leave it None so normalization
+            # can produce a sensible default.
+            raw_step = rec.get("step_type")
 
             # Normalize step_type: accept StepType enum members or strings like 'exterior'/'Exterior'/'EXTERIOR'
             def _normalize_step(s):
+                # None -> no step type provided
+                if s is None:
+                    return None
                 # If it's already a StepType enum member, return its value
                 try:
                     if isinstance(s, StepType):
@@ -197,7 +204,10 @@ class OrchestratorAgent:
                     # fallback: title-case the string
                     return s_str.title()
                 # any other type: stringify
-                return str(s)
+                try:
+                    return str(s)
+                except Exception:
+                    return None
 
             step_type = _normalize_step(raw_step)
             r = AuditRecommendation(
