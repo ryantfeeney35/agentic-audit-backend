@@ -112,8 +112,14 @@ class AuditRecommendation(db.Model):
     # Source of recommendation: 'audio' when derived from recorded audio/transcripts, 'ai' otherwise.
     source = db.Column(db.String, nullable=False, server_default=sa.text("'ai'"))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    # Optional associated media (a suggested photo/video) for this recommendation
+    recommended_media_id = db.Column(db.Integer, db.ForeignKey("audit_media.id", ondelete="SET NULL"), nullable=True)
+    # Track whether the recommended_media was auto-suggested or auditor-selected
+    recommended_media_source = db.Column(db.String, nullable=True)
 
     audit = relationship("Audit", back_populates="recommendations")
+    # relationship to the suggested media (may be None)
+    recommended_media = relationship("AuditMedia", foreign_keys=[recommended_media_id], uselist=False)
 
 
 class Contractor(db.Model):

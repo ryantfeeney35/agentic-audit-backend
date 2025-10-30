@@ -1,7 +1,7 @@
 # routes/recommendations_routes.py
 from flask import Blueprint, jsonify, request, abort, current_app
 from agents.orchestrator import OrchestratorAgent
-from models import AuditRecommendation, db
+from models import AuditRecommendation, db, AuditMedia
 import tempfile
 import os
 from werkzeug.utils import secure_filename
@@ -133,7 +133,11 @@ def serialize_rec(r):
         "display_order": r.display_order,
         "is_hidden": bool(getattr(r, "is_hidden", False)),
         "source": (getattr(r, "source", None) or "ai"),
-        "created_at": r.created_at.isoformat()
+        "created_at": r.created_at.isoformat(),
+        # recommended media association
+        "recommended_media_id": getattr(r, "recommended_media_id", None),
+        "recommended_media_source": getattr(r, "recommended_media_source", None),
+        "recommended_media_url": (r.recommended_media.media_url if getattr(r, 'recommended_media', None) else None)
     }
 
 
@@ -178,3 +182,40 @@ def upload_recommendation_audio(audit_id, rec_id):
     Thread(target=_process, args=(current_app._get_current_object(),)).start()
 
     return jsonify({"status": "processing", "media_url": media_url}), 202
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/recommended_media", methods=["PATCH"])
+def patch_recommendation_media(audit_id, rec_id):
+    """Allow auditors to override or clear the recommended media for a recommendation.
+
+    Payload: { "recommended_media_id": <int|null>, "source": "auditor" }
+    If `recommended_media_id` is null, the association will be cleared.
+    """
+    payload = request.get_json() or {}
+    if 'recommended_media_id' not in payload:
+        abort(400, description="Missing 'recommended_media_id' in request body")
+
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    try:
+        rm_id = payload.get('recommended_media_id')
+        if rm_id is None:
+            rec.recommended_media_id = None
+            rec.recommended_media_source = None
+        else:
+            # Validate that media belongs to the same audit
+            media = AuditMedia.query.filter_by(id=int(rm_id), audit_id=audit_id).first()
+            if not media:
+                abort(400, description="Invalid recommended_media_id for this audit")
+            rec.recommended_media_id = media.id
+            # mark that auditor explicitly selected this media unless caller specified otherwise
+            rec.recommended_media_source = payload.get('source') or 'auditor'
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        abort(500, description=f"Failed to update recommended media: {e}")
+
+    return jsonify(serialize_rec(rec))

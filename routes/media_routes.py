@@ -96,8 +96,9 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                     print(f"⚠️ No media found for step {step.id}")
                     return
 
-                # 2️⃣ Convert all to base64 for context
+                # 2️⃣ Convert all to base64 for context and remember file paths so we can summarize
                 images_b64 = []
+                media_file_paths = {}
                 for m in all_media:
                     try:
                         file_path = None
@@ -115,11 +116,13 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                             file_path = tmp_path
 
                         with open(file_path, "rb") as f:
-                            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                            img_bytes = f.read()
+                            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
                         images_b64.append({
                             "file_name": m.file_name,
                             "b64": img_b64
                         })
+                        media_file_paths[m.id] = file_path
                     except Exception as e:
                         print(f"⚠️ Skipped media {m.id} due to error: {e}")
 
@@ -154,6 +157,29 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 step.status = "Completed"
                 db.session.commit()
                 print(f"✅ [process_media_async] Completed {len(images_b64)} {media_type}(s) for step {step.id}")
+
+                # 6️⃣ Lightweight photo summarization: persist a short note per media so
+                # we have textual context to later match to recommendations. This is
+                # intentionally simple (filename + size + step label) as a Phase 1
+                # implementation; later we will replace with LLM/embedding-based summaries.
+                for m in all_media:
+                    try:
+                        fp = media_file_paths.get(m.id)
+                        size = None
+                        if fp and os.path.exists(fp):
+                            try:
+                                size = os.path.getsize(fp)
+                            except Exception:
+                                size = None
+
+                        if size:
+                            m.notes = f"Photo: {m.file_name} — {size} bytes — step: {step.label}"
+                        else:
+                            m.notes = f"Photo: {m.file_name} — step: {step.label}"
+                        db.session.add(m)
+                    except Exception as e:
+                        print(f"⚠️ Failed to set notes for media {m.id}: {e}")
+                db.session.commit()
 
             # --- AUDIO ---
             elif media_type == "audio":
@@ -339,6 +365,28 @@ def get_step_media(step_id):
         "created_at": m.created_at.isoformat(),
         "short_label": " ".join(m.notes.split()[:5]) + ("…" if m.notes and len(m.notes.split()) > 5 else "")
                        if m.notes else m.file_name
+    } for m in media])
+
+
+@bp.route('/audits/<int:audit_id>/media', methods=['GET'])
+def get_audit_media(audit_id):
+    """Return all media for an audit. Optional query param 'media_type' to filter (photo, video, audio)."""
+    media_type = request.args.get('media_type')
+    q = AuditMedia.query.filter_by(audit_id=audit_id)
+    if media_type:
+        q = q.filter(AuditMedia.media_type == media_type)
+    media = q.order_by(AuditMedia.created_at.desc()).all()
+    return jsonify([{
+        "id": m.id,
+        "audit_id": m.audit_id,
+        "step_id": m.step_id,
+        "step_type": AuditStep.query.get(m.step_id).step_type if m.step_id else None,
+        "side": AuditStep.query.get(m.step_id).label if m.step_id else None,
+        "media_url": m.media_url,
+        "file_name": m.file_name,
+        "media_type": m.media_type,
+        "created_at": m.created_at.isoformat(),
+        "short_label": " ".join((m.notes or m.file_name).split()[:5]) + ("…" if m.notes and len((m.notes or m.file_name).split()) > 5 else "")
     } for m in media])
 
 @bp.route('/media/<int:media_id>', methods=['DELETE'])

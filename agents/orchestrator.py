@@ -3,7 +3,7 @@ import logging
 from .base_agent import run_agent
 from .context_builder import build_audit_context, build_audio_context
 from .schemas import StepType
-from models import AgentConversation, AuditRecommendation, db
+from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
 import tempfile
 import os
 import traceback
@@ -216,6 +216,38 @@ class OrchestratorAgent:
         db.session.commit()
 
         logger.info("💾 Saved %d recommendations.", len(saved))
+        # --- Phase 1: Auto-associate a suggested photo per recommendation.
+        # Heuristic: find the most recent photo/video for the same step_type.
+        try:
+            for r in saved:
+                try:
+                    # Join AuditMedia -> AuditStep to match by step_type
+                    candidate = (
+                        AuditMedia.query
+                        .join(AuditStep, AuditMedia.step_id == AuditStep.id)
+                        .filter(
+                            AuditMedia.audit_id == self.audit_id,
+                            AuditMedia.media_type.in_(["photo", "video"]),
+                            AuditStep.step_type == r.step_type,
+                        )
+                        .order_by(AuditMedia.created_at.desc())
+                        .first()
+                    )
+                    if candidate:
+                        r.recommended_media_id = candidate.id
+                        # mark that this association was auto-suggested
+                        try:
+                            r.recommended_media_source = 'suggested'
+                        except Exception:
+                            pass
+                        db.session.add(r)
+                except Exception:
+                    logger.exception("Failed to auto-associate media for recommendation %s", getattr(r, 'id', None))
+            db.session.commit()
+            logger.info("🔗 Auto-associated media for %d recommendations.", len(saved))
+        except Exception:
+            logger.exception("Failed to auto-associate media for recommendations")
+
         return saved
 
     def process_recommendation_audio(self, rec_id: int, media_url: str, local_path: str | None = None) -> dict:
