@@ -4,6 +4,7 @@ from .base_agent import run_agent
 from .context_builder import build_audit_context, build_audio_context
 from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
+from sqlalchemy import func
 import tempfile
 import os
 import traceback
@@ -261,7 +262,7 @@ class OrchestratorAgent:
                     .filter(
                         AuditMedia.audit_id == self.audit_id,
                         AuditMedia.media_type.in_(["photo", "video"]),
-                        AuditStep.step_type == r.step_type,
+                        func.lower(AuditStep.step_type) == (r.step_type or "").lower(),
                     )
                     .all()
                 )
@@ -299,7 +300,7 @@ class OrchestratorAgent:
                         .filter(
                             AuditMedia.audit_id == self.audit_id,
                             AuditMedia.media_type.in_(["photo", "video"]),
-                            AuditStep.step_type == r.step_type,
+                            func.lower(AuditStep.step_type) == (r.step_type or "").lower(),
                         )
                         .order_by(AuditMedia.created_at.desc())
                         .first()
