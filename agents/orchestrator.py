@@ -206,8 +206,10 @@ class OrchestratorAgent:
                 annual_savings_usd=safe_float(rec.get("annual_savings_usd")),
                 upgrade_cost_usd=safe_float(rec.get("upgrade_cost_usd")),
                 payback_years=safe_float(rec.get("payback_years")),
-                # Persist source (audio | ai). Default to 'ai' when not provided.
-                source=(rec.get("_source_pass") or rec.get("source") or "ai"),
+                # Persist source (audio | ai). Use only our internal pass tag to avoid
+                # accepting arbitrary freeform 'source' strings that agents may return
+                # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
+                source=(rec.get("_source_pass") or "ai"),
             )
             db.session.add(r)
             saved.append(r)
