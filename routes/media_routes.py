@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 from supabase import create_client
 from openai import OpenAI
 import traceback
+import requests
 
 from models import AuditMedia, AuditStep, db
 from agents.base_agent import run_agent
@@ -186,6 +187,19 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 # sending large base64 payloads in prompts. This is faster and more robust.
                 def _generate_caption_from_url(client, image_url, file_name):
                     try:
+                        vision_model = os.getenv('VISION_MODEL', 'gpt-4o-mini-vision')
+                        print(f"🔎 [caption] attempting vision model={vision_model} for url={image_url}")
+
+                        # Quick reachability check before calling the LLM
+                        try:
+                            resp_check = requests.get(image_url, timeout=5)
+                            if resp_check.status_code != 200:
+                                print(f"⚠️ [caption] image URL not reachable (status={resp_check.status_code}): {image_url}")
+                                return None
+                        except Exception as e:
+                            print(f"⚠️ [caption] failed to fetch image URL prior to captioning: {e}")
+                            return None
+
                         prompt_system = (
                             "You are a helpful assistant that writes a single concise caption for an image. "
                             "Given the image URL and filename, return ONE short (<= 20 words) descriptive caption. "
@@ -195,22 +209,30 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
 
                         # Try to call a vision-capable responses/chat model. If the model
                         # does not support image URLs, this call may fail — we catch
-                        # exceptions and fallback to notes.
+                        # exceptions and fallback to notes. Log full traceback for diagnostics.
                         try:
                             resp = client.chat.completions.create(
-                                model=os.getenv('VISION_MODEL', 'gpt-4o-mini-vision'),
+                                model=vision_model,
                                 messages=[
                                     {"role": "system", "content": prompt_system},
                                     {"role": "user", "content": user_content},
                                 ],
                             )
-                            caption = resp.choices[0].message.content.strip()
-                            return caption
+                            # Defensive: ensure structure exists
+                            try:
+                                caption = resp.choices[0].message.content.strip()
+                                print(f"✅ [caption] generated caption for media {file_name}: {caption}")
+                                return caption
+                            except Exception:
+                                print(f"⚠️ [caption] unexpected response shape from vision model: {resp}")
+                                return None
                         except Exception as e:
                             print(f"⚠️ Vision-model caption generation failed for URL {image_url}: {e}")
+                            traceback.print_exc()
                             return None
                     except Exception as e:
                         print(f"⚠️ _generate_caption_from_url unexpected error: {e}")
+                        traceback.print_exc()
                         return None
 
                 for m, img_entry in zip(all_media, images_b64):
