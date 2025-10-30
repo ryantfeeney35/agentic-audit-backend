@@ -137,8 +137,8 @@ class OrchestratorAgent:
                 logger.exception("❌ %s agent failed during audio recommendations", domain)
                 audio_outputs[domain] = {}
 
-        # --- Pass 2: Contextual AI recommendations (build full context but existing builder excludes raw audio artifacts) ---
-        context = build_audit_context(self.audit_id)
+        # --- Pass 2: Contextual AI recommendations (build full context but explicitly exclude audio-derived summaries) ---
+        context = build_audit_context(self.audit_id, exclude_audio=True)
         logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
         context_outputs = {}
         for domain in domains:

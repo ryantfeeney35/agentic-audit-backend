@@ -1,8 +1,12 @@
 # agents/context_builder.py
 from models import Audit, AuditStep
 
-def build_audit_context(audit_id: int) -> str:
-    """Collect property, summaries, and AI insights into a single text context string."""
+def build_audit_context(audit_id: int, exclude_audio: bool = False) -> str:
+    """Collect property, summaries, and AI insights into a single text context string.
+
+    If `exclude_audio` is True, omit step-level `summary` entries (which are often derived
+    from audio transcripts) so downstream AI passes do not see audio-derived content.
+    """
     audit = Audit.query.get(audit_id)
     if not audit:
         return ""
@@ -27,7 +31,10 @@ def build_audit_context(audit_id: int) -> str:
             continue
 
         # Step summary (human-written or AI-summarized audio)
-        if step.summary:
+        # When excluding audio, skip the free-text step.summary which may be an audio
+        # transcript summary. This ensures AI passes that need non-audio context do not
+        # get influenced by audio transcriptions.
+        if not exclude_audio and step.summary:
             context_summary.append(f"📋 {step.label} ({step.step_type}) — {step.summary}")
 
         # AI structured output (parsed JSONB)
