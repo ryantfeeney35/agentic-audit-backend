@@ -216,12 +216,83 @@ class OrchestratorAgent:
         db.session.commit()
 
         logger.info("💾 Saved %d recommendations.", len(saved))
-        # --- Phase 1: Auto-associate a suggested photo per recommendation.
-        # Heuristic: find the most recent photo/video for the same step_type.
+        # --- Phase 3: Auto-associate a suggested photo per recommendation using embeddings.
+        # Strategy: compute an embedding for each recommendation summary and pick the
+        # AuditMedia item (photo/video) with the highest cosine similarity between
+        # the rec embedding and media.ai_embedding.vector. Fallback to the previous
+        # 'most recent' heuristic when embeddings are missing or similarity cannot be computed.
+        def _cosine(a, b):
+            try:
+                dot = sum(x * y for x, y in zip(a, b))
+                lena = sum(x * x for x in a) ** 0.5
+                lenb = sum(y * y for y in b) ** 0.5
+                if lena == 0 or lenb == 0:
+                    return 0.0
+                return dot / (lena * lenb)
+            except Exception:
+                return 0.0
+
         try:
-            for r in saved:
+            # create OpenAI client for embedding calls
+            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        except Exception:
+            emb_client = None
+
+        for r in saved:
+            try:
+                rec_text = (r.summary_override or r.summary or "").strip()
+                rec_vector = None
+
+                # compute embedding for recommendation text if client available
+                if emb_client and rec_text:
+                    try:
+                        resp = emb_client.embeddings.create(model="text-embedding-3-large", input=rec_text)
+                        rec_vector = resp.data[0].embedding if getattr(resp, 'data', None) else None
+                    except Exception:
+                        rec_vector = None
+
+                best = None
+                best_score = -1.0
+
+                # candidate media: photos/videos for this audit and same step_type
+                candidates = (
+                    AuditMedia.query
+                    .join(AuditStep, AuditMedia.step_id == AuditStep.id)
+                    .filter(
+                        AuditMedia.audit_id == self.audit_id,
+                        AuditMedia.media_type.in_(["photo", "video"]),
+                        AuditStep.step_type == r.step_type,
+                    )
+                    .all()
+                )
+
+                if rec_vector and candidates:
+                    for m in candidates:
+                        try:
+                            med_emb = None
+                            if isinstance(m.ai_embedding, dict):
+                                med_emb = m.ai_embedding.get('vector') or m.ai_embedding.get('embedding')
+                            # If ai_embedding stored as list directly
+                            if med_emb is None and isinstance(m.ai_embedding, list):
+                                med_emb = m.ai_embedding
+                            if not med_emb:
+                                continue
+                            score = _cosine(rec_vector, med_emb)
+                            if score > best_score:
+                                best_score = score
+                                best = m
+                        except Exception:
+                            continue
+
+                # If we found a best by embeddings, accept it (optionally require a min threshold)
+                if best and best_score > 0.0:
+                    r.recommended_media_id = best.id
+                    r.recommended_media_source = 'suggested'
+                    db.session.add(r)
+                    continue
+
+                # Fallback to Phase 1 heuristic: most recent media for the same step_type
                 try:
-                    # Join AuditMedia -> AuditStep to match by step_type
                     candidate = (
                         AuditMedia.query
                         .join(AuditStep, AuditMedia.step_id == AuditStep.id)
@@ -235,18 +306,20 @@ class OrchestratorAgent:
                     )
                     if candidate:
                         r.recommended_media_id = candidate.id
-                        # mark that this association was auto-suggested
-                        try:
-                            r.recommended_media_source = 'suggested'
-                        except Exception:
-                            pass
+                        r.recommended_media_source = 'suggested'
                         db.session.add(r)
                 except Exception:
-                    logger.exception("Failed to auto-associate media for recommendation %s", getattr(r, 'id', None))
+                    logger.exception("Failed fallback auto-association for recommendation %s", getattr(r, 'id', None))
+
+            except Exception:
+                logger.exception("Failed to compute media association for recommendation %s", getattr(r, 'id', None))
+
+        try:
             db.session.commit()
             logger.info("🔗 Auto-associated media for %d recommendations.", len(saved))
         except Exception:
-            logger.exception("Failed to auto-associate media for recommendations")
+            db.session.rollback()
+            logger.exception("Failed to commit media associations for recommendations")
 
         return saved
 

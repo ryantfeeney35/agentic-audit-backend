@@ -182,35 +182,46 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                         print(f"⚠️ Failed to set notes for media {m.id}: {e}")
                 db.session.commit()
                 # 7️⃣ Phase 2: generate short LLM captions and embeddings per media.
-                # We iterate corresponding (all_media, images_b64) pairs. If the base64
-                # payload is too large to safely send to the LLM, we fallback to the
-                # lightweight notes saved above.
+                # Use a vision-capable model that can accept image URLs rather than
+                # sending large base64 payloads in prompts. This is faster and more robust.
+                def _generate_caption_from_url(client, image_url, file_name):
+                    try:
+                        prompt_system = (
+                            "You are a helpful assistant that writes a single concise caption for an image. "
+                            "Given the image URL and filename, return ONE short (<= 20 words) descriptive caption. "
+                            "Do not invent details that cannot be seen in the image. Keep it factual and concise."
+                        )
+                        user_content = f"Filename: {file_name}\nImage URL: {image_url}\n"
+
+                        # Try to call a vision-capable responses/chat model. If the model
+                        # does not support image URLs, this call may fail — we catch
+                        # exceptions and fallback to notes.
+                        try:
+                            resp = client.chat.completions.create(
+                                model=os.getenv('VISION_MODEL', 'gpt-4o-mini-vision'),
+                                messages=[
+                                    {"role": "system", "content": prompt_system},
+                                    {"role": "user", "content": user_content},
+                                ],
+                            )
+                            caption = resp.choices[0].message.content.strip()
+                            return caption
+                        except Exception as e:
+                            print(f"⚠️ Vision-model caption generation failed for URL {image_url}: {e}")
+                            return None
+                    except Exception as e:
+                        print(f"⚠️ _generate_caption_from_url unexpected error: {e}")
+                        return None
+
                 for m, img_entry in zip(all_media, images_b64):
                     try:
+                        img_url = m.media_url or img_entry.get('url') or None
                         caption = None
-                        b64 = img_entry.get('b64') or ''
-                        # Safety: avoid sending extremely large base64 payloads to the LLM
-                        if len(b64) < 200_000:
-                            try:
-                                prompt_system = (
-                                    "You are a helpful assistant that writes a single concise caption for an image. "
-                                    "Given the filename and a base64-encoded image, return ONE short (<= 20 words) descriptive caption. "
-                                    "Do not invent details that cannot be seen in the image. Keep it factual and concise."
-                                )
-                                user_content = f"Filename: {img_entry.get('file_name', '')}\nBase64Image:\n{b64}"
-                                resp = client.chat.completions.create(
-                                    model="gpt-4o",
-                                    messages=[
-                                        {"role": "system", "content": prompt_system},
-                                        {"role": "user", "content": user_content},
-                                    ],
-                                )
-                                caption = resp.choices[0].message.content.strip()
-                            except Exception as e:
-                                print(f"⚠️ Failed to generate caption for media {m.id}: {e}")
-                                caption = None
-                        else:
-                            # fallback: use notes or filename
+                        if img_url:
+                            caption = _generate_caption_from_url(client, img_url, img_entry.get('file_name') or m.file_name)
+
+                        if not caption:
+                            # fallback to lightweight note or filename
                             caption = m.notes or f"Photo: {m.file_name}"
 
                         # Persist caption
