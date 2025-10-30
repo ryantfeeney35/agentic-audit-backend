@@ -187,7 +187,7 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 # sending large base64 payloads in prompts. This is faster and more robust.
                 def _generate_caption_from_url(client, image_url, file_name):
                     try:
-                        vision_model = os.getenv('VISION_MODEL', 'gpt-4o-mini-vision')
+                        vision_model = os.getenv('VISION_MODEL', 'gpt-4o-mini')
                         print(f"🔎 [caption] attempting vision model={vision_model} for url={image_url}")
 
                         # Quick reachability check before calling the LLM
