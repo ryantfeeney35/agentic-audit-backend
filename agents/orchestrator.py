@@ -1,9 +1,15 @@
 # agents/orchestrator.py
 import logging
 from .base_agent import run_agent
-from .context_builder import build_audit_context
+from .context_builder import build_audit_context, build_audio_context
 from .schemas import StepType
-from models import AgentConversation, AuditRecommendation, db
+from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
+from sqlalchemy import func
+import tempfile
+import os
+import traceback
+from openai import OpenAI
+from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -50,7 +56,7 @@ class OrchestratorAgent:
         logger.info("📄 Context built (len=%d)", len(context))
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        for domain in ["insulation", "siding", "hvac", "interior"]:
             logger.info("➡️ Dispatching bootstrap to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, context, bootstrap=True, audit_id=self.audit_id)
@@ -91,7 +97,7 @@ class OrchestratorAgent:
         agent_context = f"Conversation so far:\n{history}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        for domain in ["insulation", "siding", "hvac", "interior"]:
             logger.info("➡️ Dispatching follow-up to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, agent_context, bootstrap=False, audit_id=self.audit_id)
@@ -117,20 +123,41 @@ class OrchestratorAgent:
     # --- Generate upgrade recommendations ---
     def generate_recommendations(self):
         logger.info("🧮 Generating recommendations (audit_id=%s)", self.audit_id)
-        context = build_audit_context(self.audit_id)
+        # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
+        domains = ["insulation", "siding", "hvac", "interior"]
 
-        outputs = {}
-        for domain in ["insulation", "siding", "hvac"]:
+        # --- Pass 1: Audio-derived recommendations ---
+        audio_context = build_audio_context(self.audit_id)
+        logger.info("🔊 Audio pass context length=%d", len(audio_context or ""))
+        audio_outputs = {}
+        for domain in domains:
             try:
-                outputs[domain] = run_agent(domain, context, audit_id=self.audit_id, mode="recommendations")
+                # Pass a keyed dict so tests/mocks can detect audio-pass vs context-pass.
+                audio_outputs[domain] = run_agent(domain, {"type": "audio_pass", "text": audio_context}, audit_id=self.audit_id, mode="recommendations")
             except Exception:
-                logger.exception("❌ %s agent failed during recommendations", domain)
-                outputs[domain] = {}
+                logger.exception("❌ %s agent failed during audio recommendations", domain)
+                audio_outputs[domain] = {}
 
+        # --- Pass 2: Contextual AI recommendations (build full context but explicitly exclude audio-derived summaries) ---
+        context = build_audit_context(self.audit_id, exclude_audio=True)
+        logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
+        context_outputs = {}
+        for domain in domains:
+            try:
+                context_outputs[domain] = run_agent(domain, context, audit_id=self.audit_id, mode="recommendations")
+            except Exception:
+                logger.exception("❌ %s agent failed during contextual recommendations", domain)
+                context_outputs[domain] = {}
+
+        # Merge audio-first then AI context outputs preserving order
         all_recs = []
-        for domain, result in outputs.items():
-            recs = result.get("recommendations") or []
-            for r in recs:
+        for domain in domains:
+            for r in (audio_outputs.get(domain, {}) or {}).get("recommendations", []) or []:
+                r["_source_pass"] = "audio"
+                all_recs.append(r)
+        for domain in domains:
+            for r in (context_outputs.get(domain, {}) or {}).get("recommendations", []) or []:
+                r["_source_pass"] = "ai"
                 all_recs.append(r)
 
         # Coerce numeric fields safely
@@ -146,10 +173,17 @@ class OrchestratorAgent:
         saved = []
         for rec in all_recs:
             summary = rec.get("summary", "")
-            raw_step = rec.get("step_type", domain)
+            # Prefer an explicit step_type from the agent output; do not
+            # fall back to the outer `domain` variable (which would be the
+            # last loop value). If missing, leave it None so normalization
+            # can produce a sensible default.
+            raw_step = rec.get("step_type")
 
             # Normalize step_type: accept StepType enum members or strings like 'exterior'/'Exterior'/'EXTERIOR'
             def _normalize_step(s):
+                # None -> no step type provided
+                if s is None:
+                    return None
                 # If it's already a StepType enum member, return its value
                 try:
                     if isinstance(s, StepType):
@@ -170,7 +204,10 @@ class OrchestratorAgent:
                     # fallback: title-case the string
                     return s_str.title()
                 # any other type: stringify
-                return str(s)
+                try:
+                    return str(s)
+                except Exception:
+                    return None
 
             step_type = _normalize_step(raw_step)
             r = AuditRecommendation(
@@ -180,10 +217,223 @@ class OrchestratorAgent:
                 annual_savings_usd=safe_float(rec.get("annual_savings_usd")),
                 upgrade_cost_usd=safe_float(rec.get("upgrade_cost_usd")),
                 payback_years=safe_float(rec.get("payback_years")),
+                # Persist source (audio | ai). Use only our internal pass tag to avoid
+                # accepting arbitrary freeform 'source' strings that agents may return
+                # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
+                source=(rec.get("_source_pass") or "ai"),
             )
             db.session.add(r)
             saved.append(r)
         db.session.commit()
 
         logger.info("💾 Saved %d recommendations.", len(saved))
+        # --- Phase 3: Auto-associate a suggested photo per recommendation using embeddings.
+        # Strategy: compute an embedding for each recommendation summary and pick the
+        # AuditMedia item (photo/video) with the highest cosine similarity between
+        # the rec embedding and media.ai_embedding.vector. Fallback to the previous
+        # 'most recent' heuristic when embeddings are missing or similarity cannot be computed.
+        def _cosine(a, b):
+            try:
+                dot = sum(x * y for x, y in zip(a, b))
+                lena = sum(x * x for x in a) ** 0.5
+                lenb = sum(y * y for y in b) ** 0.5
+                if lena == 0 or lenb == 0:
+                    return 0.0
+                return dot / (lena * lenb)
+            except Exception:
+                return 0.0
+
+        try:
+            # create OpenAI client for embedding calls
+            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        except Exception:
+            emb_client = None
+
+        for r in saved:
+            try:
+                rec_text = (r.summary_override or r.summary or "").strip()
+                rec_vector = None
+
+                # compute embedding for recommendation text if client available
+                if emb_client and rec_text:
+                    try:
+                        resp = emb_client.embeddings.create(model="text-embedding-3-large", input=rec_text)
+                        rec_vector = resp.data[0].embedding if getattr(resp, 'data', None) else None
+                    except Exception:
+                        rec_vector = None
+
+                best = None
+                best_score = -1.0
+
+                # candidate media: photos/videos for this audit and same step_type
+                candidates = (
+                    AuditMedia.query
+                    .join(AuditStep, AuditMedia.step_id == AuditStep.id)
+                    .filter(
+                        AuditMedia.audit_id == self.audit_id,
+                        AuditMedia.media_type.in_(["photo", "video"]),
+                        func.lower(AuditStep.step_type) == (r.step_type or "").lower(),
+                    )
+                    .all()
+                )
+
+                if rec_vector and candidates:
+                    for m in candidates:
+                        try:
+                            med_emb = None
+                            if isinstance(m.ai_embedding, dict):
+                                med_emb = m.ai_embedding.get('vector') or m.ai_embedding.get('embedding')
+                            # If ai_embedding stored as list directly
+                            if med_emb is None and isinstance(m.ai_embedding, list):
+                                med_emb = m.ai_embedding
+                            if not med_emb:
+                                continue
+                            score = _cosine(rec_vector, med_emb)
+                            if score > best_score:
+                                best_score = score
+                                best = m
+                        except Exception:
+                            continue
+
+                # If we found a best by embeddings, accept it (optionally require a min threshold)
+                if best and best_score > 0.0:
+                    r.recommended_media_id = best.id
+                    r.recommended_media_source = 'suggested'
+                    db.session.add(r)
+                    continue
+
+                # Fallback to Phase 1 heuristic: most recent media for the same step_type
+                try:
+                    candidate = (
+                        AuditMedia.query
+                        .join(AuditStep, AuditMedia.step_id == AuditStep.id)
+                        .filter(
+                            AuditMedia.audit_id == self.audit_id,
+                            AuditMedia.media_type.in_(["photo", "video"]),
+                            func.lower(AuditStep.step_type) == (r.step_type or "").lower(),
+                        )
+                        .order_by(AuditMedia.created_at.desc())
+                        .first()
+                    )
+                    if candidate:
+                        r.recommended_media_id = candidate.id
+                        r.recommended_media_source = 'suggested'
+                        db.session.add(r)
+                except Exception:
+                    logger.exception("Failed fallback auto-association for recommendation %s", getattr(r, 'id', None))
+
+            except Exception:
+                logger.exception("Failed to compute media association for recommendation %s", getattr(r, 'id', None))
+
+        try:
+            db.session.commit()
+            logger.info("🔗 Auto-associated media for %d recommendations.", len(saved))
+        except Exception:
+            db.session.rollback()
+            logger.exception("Failed to commit media associations for recommendations")
+
         return saved
+
+    def process_recommendation_audio(self, rec_id: int, media_url: str, local_path: str | None = None) -> dict:
+        """Transcribe an uploaded recommendation audio file, run the domain agent to refine it,
+        and persist the result to AuditRecommendation.summary_override.
+
+        This method is safe to call asynchronously (it commits its own DB changes).
+        Returns a dict with status and summary_override on success.
+        """
+        try:
+            logger.info("process_recommendation_audio: start rec_id=%s audit_id=%s media_url=%s", rec_id, self.audit_id, media_url)
+            rec = AuditRecommendation.query.get(rec_id)
+            if not rec:
+                logger.error("process_recommendation_audio: recommendation %s not found", rec_id)
+                return {"status": "error", "error": "recommendation_not_found"}
+
+            if rec.audit_id != self.audit_id:
+                logger.error("process_recommendation_audio: audit_id mismatch (expected %s, got %s)", self.audit_id, rec.audit_id)
+                return {"status": "error", "error": "audit_id_mismatch"}
+
+            # Ensure we have a local file to transcribe
+            tmp_path = local_path
+            if not tmp_path:
+                # Download the file
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=os.path.basename(media_url))
+                os.close(tmp_fd)
+                try:
+                    resp = urlopen(media_url)
+                    with open(tmp_path, "wb") as f:
+                        data = resp.read()
+                        f.write(data)
+                    logger.info("process_recommendation_audio: downloaded media to %s (%d bytes)", tmp_path, len(data))
+                except Exception:
+                    logger.exception("Failed to download media_url for recommendation audio")
+                    return {"status": "error", "error": "download_failed"}
+
+            # Transcribe using OpenAI speech-to-text helper (same model used elsewhere)
+            try:
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                with open(tmp_path, "rb") as fh:
+                    transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                logger.info("process_recommendation_audio: transcription complete (len=%d)", len(transcript) if transcript else 0)
+            except Exception as e:
+                logger.exception("Transcription failed: %s", e)
+                # keep transcript empty on failure
+                transcript = ""
+
+            # Choose domain based on recommendation.step_type (normalize to lowercase)
+            domain = (rec.step_type or "general").lower()
+
+            # Run the domain agent in media mode with the transcript and the original AI summary as context
+            try:
+                # Use the recommendations mode to ask the agent to professionalize the transcript
+                # into a single concise recommendation summary. This avoids media-mode behavior
+                # that asks for additional diagnostic details.
+                prompt = (
+                    "You will be given an auditor's transcript. Your job is to produce ONE concise, "
+                    "professional recommendation summary suitable for an audit report. Do NOT ask for more information; "
+                    "if details are missing, produce the best conservative recommendation you can from the transcript.\n\n"
+                    f"Transcript:\n{transcript}\n\n"
+                    f"Existing AI summary (for reference):\n{rec.summary or ''}\n\n"
+                    "Return JSON conforming to AgentOutput and populate only `recommendations` with one item."
+                )
+
+                logger.info("process_recommendation_audio: calling run_agent (recommendations mode) domain=%s audit_id=%s", domain, self.audit_id)
+                parsed = run_agent(domain, prompt, audit_id=self.audit_id, mode="recommendations")
+                logger.info("process_recommendation_audio: run_agent returned type=%s", type(parsed))
+
+                refined = None
+                if isinstance(parsed, dict):
+                    recs_list = parsed.get("recommendations") or []
+                    if isinstance(recs_list, list) and len(recs_list) > 0:
+                        first = recs_list[0]
+                        if isinstance(first, dict):
+                            refined = first.get("summary")
+                        elif isinstance(first, str):
+                            refined = first
+                logger.info("process_recommendation_audio: refined length=%s", len(refined) if refined else 0)
+            except Exception as e:
+                logger.exception("Agent refinement (recommendations mode) failed: %s", e)
+                refined = None
+
+            # Persist the override (prefer refined text, fallback to transcript)
+            try:
+                rec.summary_override = refined or (transcript if transcript else None)
+                db.session.commit()
+                logger.info("process_recommendation_audio: persisted summary_override for rec_id=%s (len=%s)", rec_id, len(rec.summary_override) if rec.summary_override else 0)
+            except Exception as e:
+                db.session.rollback()
+                logger.exception("Failed to persist summary_override: %s", e)
+                return {"status": "error", "error": "db_commit_failed"}
+
+            # cleanup downloaded temp file if we created one
+            try:
+                if local_path and os.path.exists(local_path):
+                    os.remove(local_path)
+                    logger.info("process_recommendation_audio: removed temp file %s", local_path)
+            except Exception:
+                logger.exception("Failed to remove temp audio file: %s", local_path)
+
+            return {"status": "ok", "summary_override": rec.summary_override}
+
+        except Exception as e:
+            logger.exception("Unexpected error in process_recommendation_audio: %s", e)
+            return {"status": "error", "error": "unexpected", "detail": str(e)}

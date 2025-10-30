@@ -1,7 +1,12 @@
 # routes/recommendations_routes.py
-from flask import Blueprint, jsonify, request, abort
+from flask import Blueprint, jsonify, request, abort, current_app
 from agents.orchestrator import OrchestratorAgent
-from models import AuditRecommendation, db
+from models import AuditRecommendation, db, AuditMedia
+import tempfile
+import os
+from werkzeug.utils import secure_filename
+from threading import Thread
+from supabase_utils import upload_to_supabase_and_get_url
 
 bp = Blueprint("recommendations", __name__)
 
@@ -10,18 +15,30 @@ def get_recommendations(audit_id):
     # Default behavior: exclude hidden recommendations unless include_hidden=true
     include_hidden = str(request.args.get("include_hidden", "false")).lower() in ("1", "true", "yes")
 
+    # Optional source filter: all (default), audio, ai
+    source = str(request.args.get("source", "all")).lower()
+    if source not in ("all", "audio", "ai"):
+        abort(400, description="Invalid source filter. Allowed: all, audio, ai")
+
     # If there are no recommendations at all for the audit, delegate to the agent to generate them.
     total_recs = AuditRecommendation.query.filter_by(audit_id=audit_id).count()
     if total_recs == 0:
         agent = OrchestratorAgent(audit_id)
         saved = agent.generate_recommendations()
+        # If caller requested a source filter, apply it to the generated results before returning
+        if source != "all":
+            saved = [r for r in saved if (getattr(r, 'source', None) or 'ai').lower() == source]
         return jsonify([serialize_rec(r) for r in saved])
 
     # Otherwise, load existing recommendations (respect hidden filter)
-    if include_hidden:
-        existing = AuditRecommendation.query.filter_by(audit_id=audit_id).all()
-    else:
-        existing = AuditRecommendation.query.filter_by(audit_id=audit_id, is_hidden=False).all()
+    # Build base query
+    q = AuditRecommendation.query.filter_by(audit_id=audit_id)
+    if not include_hidden:
+        q = q.filter_by(is_hidden=False)
+    if source != "all":
+        q = q.filter(AuditRecommendation.source == source)
+
+    existing = q.all()
 
     # If any recommendation has a display_order set, respect that ordering.
     if any(r.display_order is not None for r in existing):
@@ -109,10 +126,96 @@ def serialize_rec(r):
         "id": r.id,
         "step_type": r.step_type,
         "summary": r.summary,
+        "summary_override": getattr(r, "summary_override", None),
         "annual_savings_usd": r.annual_savings_usd,
         "upgrade_cost_usd": r.upgrade_cost_usd,
         "payback_years": r.payback_years,
         "display_order": r.display_order,
         "is_hidden": bool(getattr(r, "is_hidden", False)),
-        "created_at": r.created_at.isoformat()
+        "source": (getattr(r, "source", None) or "ai"),
+        "created_at": r.created_at.isoformat(),
+        # recommended media association
+        "recommended_media_id": getattr(r, "recommended_media_id", None),
+        "recommended_media_source": getattr(r, "recommended_media_source", None),
+        "recommended_media_url": (r.recommended_media.media_url if getattr(r, 'recommended_media', None) else None)
     }
+
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/audio", methods=["POST"])
+def upload_recommendation_audio(audit_id, rec_id):
+    """Accept an audio recording for a recommendation, upload to Supabase, and trigger transcription + refinement.
+
+    Returns 202 with processing status and media_url. The orchestrator will update AuditRecommendation.summary_override when complete.
+    """
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    # Accept file under 'audio' form field for clarity
+    file = request.files.get("audio") or request.files.get("file")
+    if not file:
+        abort(400, description="Missing audio file in 'audio' form field")
+
+    filename = secure_filename(f"{audit_id}_rec_{rec_id}_{file.filename}")
+    tmp_dir = tempfile.gettempdir()
+    tmp_path = os.path.join(tmp_dir, filename)
+    file.save(tmp_path)
+
+    # Upload to Supabase (uses existing helper)
+    # Use the recommendation step_type as label so files are organized by domain
+    step_label = rec.step_type or f"recommendation_{rec_id}"
+    media_url = upload_to_supabase_and_get_url(tmp_path, audit_id, step_label, media_type="audio", step_type=rec.step_type)
+    if not media_url:
+        abort(500, description="Failed to upload audio to storage")
+
+    # Trigger async processing by the orchestrator (do not block the request)
+    def _process(app):
+        # run inside the Flask application context so DB/session works
+        with app.app_context():
+            try:
+                agent = OrchestratorAgent(audit_id)
+                agent.process_recommendation_audio(rec_id, media_url, local_path=tmp_path)
+            except Exception as e:
+                app.logger.exception("Failed to process recommendation audio: %s", e)
+
+    Thread(target=_process, args=(current_app._get_current_object(),)).start()
+
+    return jsonify({"status": "processing", "media_url": media_url}), 202
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/recommended_media", methods=["PATCH"])
+def patch_recommendation_media(audit_id, rec_id):
+    """Allow auditors to override or clear the recommended media for a recommendation.
+
+    Payload: { "recommended_media_id": <int|null>, "source": "auditor" }
+    If `recommended_media_id` is null, the association will be cleared.
+    """
+    payload = request.get_json() or {}
+    if 'recommended_media_id' not in payload:
+        abort(400, description="Missing 'recommended_media_id' in request body")
+
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    try:
+        rm_id = payload.get('recommended_media_id')
+        if rm_id is None:
+            rec.recommended_media_id = None
+            rec.recommended_media_source = None
+        else:
+            # Validate that media belongs to the same audit
+            media = AuditMedia.query.filter_by(id=int(rm_id), audit_id=audit_id).first()
+            if not media:
+                abort(400, description="Invalid recommended_media_id for this audit")
+            rec.recommended_media_id = media.id
+            # mark that auditor explicitly selected this media unless caller specified otherwise
+            rec.recommended_media_source = payload.get('source') or 'auditor'
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        abort(500, description=f"Failed to update recommended media: {e}")
+
+    return jsonify(serialize_rec(rec))

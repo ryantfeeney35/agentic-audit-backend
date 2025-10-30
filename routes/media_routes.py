@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 from supabase import create_client
 from openai import OpenAI
 import traceback
+import requests
 
 from models import AuditMedia, AuditStep, db
 from agents.base_agent import run_agent
@@ -72,7 +73,8 @@ def safe_parse(s: str):
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
     """Background processor for any uploaded media (photo, video, or audio)."""
 
-    client = OpenAI()
+    # Create an OpenAI client inside the background thread (explicitly pass key)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     with app.app_context():
         media = AuditMedia.query.get(media_id)
@@ -96,8 +98,9 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                     print(f"⚠️ No media found for step {step.id}")
                     return
 
-                # 2️⃣ Convert all to base64 for context
+                # 2️⃣ Convert all to base64 for context and remember file paths so we can summarize
                 images_b64 = []
+                media_file_paths = {}
                 for m in all_media:
                     try:
                         file_path = None
@@ -115,11 +118,13 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                             file_path = tmp_path
 
                         with open(file_path, "rb") as f:
-                            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                            img_bytes = f.read()
+                            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
                         images_b64.append({
                             "file_name": m.file_name,
                             "b64": img_b64
                         })
+                        media_file_paths[m.id] = file_path
                     except Exception as e:
                         print(f"⚠️ Skipped media {m.id} due to error: {e}")
 
@@ -154,6 +159,109 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                 step.status = "Completed"
                 db.session.commit()
                 print(f"✅ [process_media_async] Completed {len(images_b64)} {media_type}(s) for step {step.id}")
+
+                # 6️⃣ Lightweight photo summarization: persist a short note per media so
+                # we have textual context to later match to recommendations. This is
+                # intentionally simple (filename + size + step label) as a Phase 1
+                # implementation; later we will replace with LLM/embedding-based summaries.
+                for m in all_media:
+                    try:
+                        fp = media_file_paths.get(m.id)
+                        size = None
+                        if fp and os.path.exists(fp):
+                            try:
+                                size = os.path.getsize(fp)
+                            except Exception:
+                                size = None
+
+                        if size:
+                            m.notes = f"Photo: {m.file_name} — {size} bytes — step: {step.label}"
+                        else:
+                            m.notes = f"Photo: {m.file_name} — step: {step.label}"
+                        db.session.add(m)
+                    except Exception as e:
+                        print(f"⚠️ Failed to set notes for media {m.id}: {e}")
+                db.session.commit()
+                # 7️⃣ Phase 2: generate short LLM captions and embeddings per media.
+                # Use a vision-capable model that can accept image URLs rather than
+                # sending large base64 payloads in prompts. This is faster and more robust.
+                def _generate_caption_from_url(client, image_url, file_name):
+                    try:
+                        vision_model = os.getenv('VISION_MODEL', 'gpt-4o-mini')
+                        print(f"🔎 [caption] attempting vision model={vision_model} for url={image_url}")
+
+                        # Quick reachability check before calling the LLM
+                        try:
+                            resp_check = requests.get(image_url, timeout=5)
+                            if resp_check.status_code != 200:
+                                print(f"⚠️ [caption] image URL not reachable (status={resp_check.status_code}): {image_url}")
+                                return None
+                        except Exception as e:
+                            print(f"⚠️ [caption] failed to fetch image URL prior to captioning: {e}")
+                            return None
+
+                        prompt_system = (
+                            "You are a helpful assistant that writes a single concise caption for an image. "
+                            "Given the image URL and filename, return ONE short (<= 20 words) descriptive caption. "
+                            "Do not invent details that cannot be seen in the image. Keep it factual and concise."
+                        )
+                        user_content = f"Filename: {file_name}\nImage URL: {image_url}\n"
+
+                        # Try to call a vision-capable responses/chat model. If the model
+                        # does not support image URLs, this call may fail — we catch
+                        # exceptions and fallback to notes. Log full traceback for diagnostics.
+                        try:
+                            resp = client.chat.completions.create(
+                                model=vision_model,
+                                messages=[
+                                    {"role": "system", "content": prompt_system},
+                                    {"role": "user", "content": user_content},
+                                ],
+                            )
+                            # Defensive: ensure structure exists
+                            try:
+                                caption = resp.choices[0].message.content.strip()
+                                print(f"✅ [caption] generated caption for media {file_name}: {caption}")
+                                return caption
+                            except Exception:
+                                print(f"⚠️ [caption] unexpected response shape from vision model: {resp}")
+                                return None
+                        except Exception as e:
+                            print(f"⚠️ Vision-model caption generation failed for URL {image_url}: {e}")
+                            traceback.print_exc()
+                            return None
+                    except Exception as e:
+                        print(f"⚠️ _generate_caption_from_url unexpected error: {e}")
+                        traceback.print_exc()
+                        return None
+
+                for m, img_entry in zip(all_media, images_b64):
+                    try:
+                        img_url = m.media_url or img_entry.get('url') or None
+                        caption = None
+                        if img_url:
+                            caption = _generate_caption_from_url(client, img_url, img_entry.get('file_name') or m.file_name)
+
+                        if not caption:
+                            # fallback to lightweight note or filename
+                            caption = m.notes or f"Photo: {m.file_name}"
+
+                        # Persist caption
+                        if caption:
+                            m.ai_caption = caption
+
+                            # Create embeddings for caption
+                            try:
+                                emb = client.embeddings.create(model="text-embedding-3-large", input=caption)
+                                vector = emb.data[0].embedding if getattr(emb, 'data', None) else None
+                                m.ai_embedding = {"vector": vector} if vector else {}
+                            except Exception as e:
+                                print(f"⚠️ Failed to create embedding for media {m.id}: {e}")
+
+                        db.session.add(m)
+                    except Exception as e:
+                        print(f"⚠️ Failed to persist AI caption/embedding for media {m.id}: {e}")
+                db.session.commit()
 
             # --- AUDIO ---
             elif media_type == "audio":
@@ -339,6 +447,28 @@ def get_step_media(step_id):
         "created_at": m.created_at.isoformat(),
         "short_label": " ".join(m.notes.split()[:5]) + ("…" if m.notes and len(m.notes.split()) > 5 else "")
                        if m.notes else m.file_name
+    } for m in media])
+
+
+@bp.route('/audits/<int:audit_id>/media', methods=['GET'])
+def get_audit_media(audit_id):
+    """Return all media for an audit. Optional query param 'media_type' to filter (photo, video, audio)."""
+    media_type = request.args.get('media_type')
+    q = AuditMedia.query.filter_by(audit_id=audit_id)
+    if media_type:
+        q = q.filter(AuditMedia.media_type == media_type)
+    media = q.order_by(AuditMedia.created_at.desc()).all()
+    return jsonify([{
+        "id": m.id,
+        "audit_id": m.audit_id,
+        "step_id": m.step_id,
+        "step_type": AuditStep.query.get(m.step_id).step_type if m.step_id else None,
+        "side": AuditStep.query.get(m.step_id).label if m.step_id else None,
+        "media_url": m.media_url,
+        "file_name": m.file_name,
+        "media_type": m.media_type,
+        "created_at": m.created_at.isoformat(),
+        "short_label": " ".join((m.notes or m.file_name).split()[:5]) + ("…" if m.notes and len((m.notes or m.file_name).split()) > 5 else "")
     } for m in media])
 
 @bp.route('/media/<int:media_id>', methods=['DELETE'])

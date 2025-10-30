@@ -73,6 +73,10 @@ class AuditMedia(db.Model):
     file_name = db.Column(db.String, nullable=False)
     media_type = db.Column(db.String, nullable=False)
     notes = db.Column(db.Text, nullable=True)
+    # AI-generated caption for the media (one-line summary)
+    ai_caption = db.Column(db.Text, nullable=True)
+    # AI embedding vector or metadata (JSONB) — stored as list of floats or dict
+    ai_embedding = db.Column(JSONB, default=dict)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -100,6 +104,8 @@ class AuditRecommendation(db.Model):
     audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String(50), nullable=False)
     summary = db.Column(db.Text, nullable=False)
+    # Optional human-refined summary recorded/uploaded by auditors (transcribed + refined)
+    summary_override = db.Column(db.Text, nullable=True)
     annual_savings_usd = db.Column(db.Float)
     upgrade_cost_usd = db.Column(db.Float)
     payback_years = db.Column(db.Float)
@@ -107,9 +113,17 @@ class AuditRecommendation(db.Model):
     display_order = db.Column(db.Integer, nullable=True)
     # Allow auditors to hide recommendations without deleting them.
     is_hidden = db.Column(db.Boolean, nullable=False, server_default=sa.text('false'))
+    # Source of recommendation: 'audio' when derived from recorded audio/transcripts, 'ai' otherwise.
+    source = db.Column(db.String, nullable=False, server_default=sa.text("'ai'"))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    # Optional associated media (a suggested photo/video) for this recommendation
+    recommended_media_id = db.Column(db.Integer, db.ForeignKey("audit_media.id", ondelete="SET NULL"), nullable=True)
+    # Track whether the recommended_media was auto-suggested or auditor-selected
+    recommended_media_source = db.Column(db.String, nullable=True)
 
     audit = relationship("Audit", back_populates="recommendations")
+    # relationship to the suggested media (may be None)
+    recommended_media = relationship("AuditMedia", foreign_keys=[recommended_media_id], uselist=False)
 
 
 class Contractor(db.Model):
