@@ -73,6 +73,10 @@ class AuditMedia(db.Model):
     file_name = db.Column(db.String, nullable=False)
     media_type = db.Column(db.String, nullable=False)
     notes = db.Column(db.Text, nullable=True)
+    # AI-generated caption for the media (one-line summary)
+    ai_caption = db.Column(db.Text, nullable=True)
+    # AI embedding vector or metadata (JSONB) — stored as list of floats or dict
+    ai_embedding = db.Column(JSONB, default=dict)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

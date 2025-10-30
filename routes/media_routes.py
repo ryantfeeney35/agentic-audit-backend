@@ -72,7 +72,8 @@ def safe_parse(s: str):
 def process_media_async(app, media_id: int, local_path: str, public_url: str, media_type: str):
     """Background processor for any uploaded media (photo, video, or audio)."""
 
-    client = OpenAI()
+    # Create an OpenAI client inside the background thread (explicitly pass key)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     with app.app_context():
         media = AuditMedia.query.get(media_id)
@@ -179,6 +180,54 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
                         db.session.add(m)
                     except Exception as e:
                         print(f"⚠️ Failed to set notes for media {m.id}: {e}")
+                db.session.commit()
+                # 7️⃣ Phase 2: generate short LLM captions and embeddings per media.
+                # We iterate corresponding (all_media, images_b64) pairs. If the base64
+                # payload is too large to safely send to the LLM, we fallback to the
+                # lightweight notes saved above.
+                for m, img_entry in zip(all_media, images_b64):
+                    try:
+                        caption = None
+                        b64 = img_entry.get('b64') or ''
+                        # Safety: avoid sending extremely large base64 payloads to the LLM
+                        if len(b64) < 200_000:
+                            try:
+                                prompt_system = (
+                                    "You are a helpful assistant that writes a single concise caption for an image. "
+                                    "Given the filename and a base64-encoded image, return ONE short (<= 20 words) descriptive caption. "
+                                    "Do not invent details that cannot be seen in the image. Keep it factual and concise."
+                                )
+                                user_content = f"Filename: {img_entry.get('file_name', '')}\nBase64Image:\n{b64}"
+                                resp = client.chat.completions.create(
+                                    model="gpt-4o",
+                                    messages=[
+                                        {"role": "system", "content": prompt_system},
+                                        {"role": "user", "content": user_content},
+                                    ],
+                                )
+                                caption = resp.choices[0].message.content.strip()
+                            except Exception as e:
+                                print(f"⚠️ Failed to generate caption for media {m.id}: {e}")
+                                caption = None
+                        else:
+                            # fallback: use notes or filename
+                            caption = m.notes or f"Photo: {m.file_name}"
+
+                        # Persist caption
+                        if caption:
+                            m.ai_caption = caption
+
+                            # Create embeddings for caption
+                            try:
+                                emb = client.embeddings.create(model="text-embedding-3-large", input=caption)
+                                vector = emb.data[0].embedding if getattr(emb, 'data', None) else None
+                                m.ai_embedding = {"vector": vector} if vector else {}
+                            except Exception as e:
+                                print(f"⚠️ Failed to create embedding for media {m.id}: {e}")
+
+                        db.session.add(m)
+                    except Exception as e:
+                        print(f"⚠️ Failed to persist AI caption/embedding for media {m.id}: {e}")
                 db.session.commit()
 
             # --- AUDIO ---
