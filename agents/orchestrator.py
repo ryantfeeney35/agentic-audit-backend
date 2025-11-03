@@ -1,15 +1,19 @@
 # agents/orchestrator.py
 import logging
 from .base_agent import run_agent
-from .context_builder import build_audit_context, build_audio_context
+from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context
 from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
+from memory.config import memory_enabled
+from memory import chat_memory as chatmem
 from sqlalchemy import func
 import tempfile
 import os
 import traceback
 from openai import OpenAI
 from urllib.request import urlopen
+from memory.config import semantic_enabled
+from memory.semantic import upsert_embeddings_for_audit
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +28,12 @@ class OrchestratorAgent:
     # --- Conversation utilities ---
     def _save_message(self, role: str, domain: str, content: str):
         logger.debug("💾 Saving message: role=%s, domain=%s, content=%s", role, domain, content[:300])
+        if memory_enabled():
+            try:
+                chatmem.save_message(self.audit_id, domain, role, content)
+                return None
+            except Exception:
+                pass
         msg = AgentConversation(
             audit_id=self.audit_id,
             role=role,
@@ -36,6 +46,16 @@ class OrchestratorAgent:
 
     def _get_history(self) -> str:
         """Return formatted conversation history excluding orchestrator summaries."""
+        # Prefer memory-backed recent messages if enabled
+        if memory_enabled():
+            try:
+                msgs = chatmem.get_recent_messages(self.audit_id, limit=24)
+                # Filter orchestrator assistant summaries (assistant role, orchestrator domain)
+                filtered = [m for m in msgs if not (m.startswith("[assistant]") and "[orchestrator]" in m)]
+                if filtered:
+                    return "\n".join(filtered)
+            except Exception:
+                pass
         rows = (
             AgentConversation.query
             .filter_by(audit_id=self.audit_id)
@@ -52,7 +72,7 @@ class OrchestratorAgent:
     # --- Bootstrap orchestration ---
     def bootstrap(self) -> str:
         logger.info("🚀 Orchestrator bootstrap started (audit_id=%s)", self.audit_id)
-        context = build_audit_context(self.audit_id)
+        context = get_audit_memory_context(self.audit_id)
         logger.info("📄 Context built (len=%d)", len(context))
 
         outputs = {}
@@ -90,11 +110,10 @@ class OrchestratorAgent:
         logger.info("💬 Handling user answer (audit_id=%s)", self.audit_id)
         self._save_message("user", "orchestrator", user_answer)
 
-        full_context = build_audit_context(self.audit_id)
-        self._save_message("system", "orchestrator", f"[FULL CONTEXT SNAPSHOT]\n{full_context[:2000]}...")
+        memory_context = get_audit_memory_context(self.audit_id)
+        self._save_message("system", "orchestrator", f"[FULL CONTEXT SNAPSHOT]\n{memory_context[:2000]}...")
 
-        history = self._get_history()
-        agent_context = f"Conversation so far:\n{history}\n\nLatest user answer:\n{user_answer}"
+        agent_context = f"{memory_context}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
         for domain in ["insulation", "siding", "hvac", "interior"]:
@@ -139,7 +158,13 @@ class OrchestratorAgent:
                 audio_outputs[domain] = {}
 
         # --- Pass 2: Contextual AI recommendations (build full context but explicitly exclude audio-derived summaries) ---
-        context = build_audit_context(self.audit_id, exclude_audio=True)
+        # Refresh semantic embedding index before building context (Phase 3)
+        if semantic_enabled():
+            try:
+                upsert_embeddings_for_audit(self.audit_id)
+            except Exception:
+                logger.debug("upsert_embeddings_for_audit skipped due to error", exc_info=True)
+        context = get_audit_memory_context(self.audit_id, exclude_audio=True)
         logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
         context_outputs = {}
         for domain in domains:

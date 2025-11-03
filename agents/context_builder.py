@@ -1,11 +1,13 @@
 # agents/context_builder.py
 from models import Audit, AuditStep
+from memory.config import memory_enabled, semantic_enabled, semantic_top_k, context_char_cap
+from memory.semantic import retrieve_relevant_snippets
+from memory.chat_memory import get_recent_messages
 
-def build_audit_context(audit_id: int, exclude_audio: bool = False) -> str:
-    """Collect property, summaries, and AI insights into a single text context string.
 
-    If `exclude_audio` is True, omit step-level `summary` entries (which are often derived
-    from audio transcripts) so downstream AI passes do not see audio-derived content.
+def get_structured_context(audit_id: int, exclude_audio: bool = False) -> str:
+    """Build the structured portion of the context: property facts, interview notes,
+    step summaries, and AI structured findings.
     """
     audit = Audit.query.get(audit_id)
     if not audit:
@@ -31,9 +33,6 @@ def build_audit_context(audit_id: int, exclude_audio: bool = False) -> str:
             continue
 
         # Step summary (human-written or AI-summarized audio)
-        # When excluding audio, skip the free-text step.summary which may be an audio
-        # transcript summary. This ensures AI passes that need non-audio context do not
-        # get influenced by audio transcriptions.
         if not exclude_audio and step.summary:
             context_summary.append(f"📋 {step.label} ({step.step_type}) — {step.summary}")
 
@@ -41,14 +40,65 @@ def build_audit_context(audit_id: int, exclude_audio: bool = False) -> str:
         if step.ai_summary and isinstance(step.ai_summary, dict):
             ai_parts = []
             for key, val in step.ai_summary.items():
-                # Flatten any nested simple fields
                 if isinstance(val, (str, int, float)):
                     ai_parts.append(f"{key.replace('_', ' ').title()}: {val}")
             if ai_parts:
                 context_summary.append(f"🤖 {step.step_type.title()} findings: " + ", ".join(ai_parts))
 
-    # --- Final compiled context string ---
     return "\n".join(context_summary)
+
+def build_audit_context(audit_id: int, exclude_audio: bool = False) -> str:
+    """Legacy structured context builder (delegates to get_structured_context)."""
+    return get_structured_context(audit_id, exclude_audio=exclude_audio)
+
+
+def get_audit_memory_context(
+    audit_id: int,
+    domain: str | None = None,
+    exclude_audio: bool = False,
+    chat_limit: int = 12,
+) -> str:
+    """Return structured context plus a tail of recent conversation from persistent memory.
+
+    - Excludes orchestrator assistant messages from the conversational tail.
+    - Safe to call when memory is disabled; returns only structured context.
+    """
+    structured = get_structured_context(audit_id, exclude_audio=exclude_audio)
+    if not memory_enabled():
+        return structured
+
+    msgs = get_recent_messages(audit_id, limit=chat_limit) or []
+    # Filter out orchestrator assistant messages; our stored format is like "[ai] [domain] content"
+    filtered: list[str] = []
+    for m in msgs:
+        # Normalize role marker
+        is_assistant = m.startswith("[ai]") or m.startswith("[assistant]")
+        # Keep if not an orchestrator assistant line
+        if is_assistant and "[orchestrator]" in m:
+            continue
+        filtered.append(m)
+
+    sections: list[str] = [structured]
+    if filtered:
+        sections.append("---\n\nRecent discussion:\n" + "\n".join(filtered))
+
+    # Optional semantic recall (Phase 3)
+    if semantic_enabled():
+        try:
+            # Use the structured context as the query seed
+            snippets = retrieve_relevant_snippets(audit_id, structured, k=semantic_top_k())
+            if snippets:
+                sections.append("---\nRelevant prior findings:\n- " + "\n- ".join(snippets))
+        except Exception:
+            pass
+
+    final = "\n\n".join([s for s in sections if s])
+
+    # Safe truncation (Phase 4)
+    cap = context_char_cap()
+    if len(final) > cap:
+        final = final[:cap] + "\n... [truncated]"
+    return final
 
 
 def build_audio_context(audit_id: int) -> str:

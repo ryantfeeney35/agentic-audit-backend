@@ -12,6 +12,8 @@ from .schemas import (
     InterviewSchema,
 )
 from models import AgentConversation, db
+from memory.config import memory_enabled
+from memory import chat_memory as chatmem
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -177,28 +179,58 @@ def run_agent(
     # Persist conversation (only for interactive modes)
     # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id, domain=domain, role="system", content=system_message
+        if memory_enabled():
+            try:
+                chatmem.save_message(audit_id, domain, "system", system_message)
+                chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
+                chatmem.save_message(audit_id, domain, "assistant", resp_text)
+            except Exception:
+                # Fallback to legacy DB writes on failure
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id, domain=domain, role="system", content=system_message
+                    )
+                )
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id,
+                        domain=domain,
+                        role="user",
+                        content=str(context)[:2000],
+                    )
+                )
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id,
+                        domain=domain,
+                        role="assistant",
+                        content=resp_text,
+                    )
+                )
+                db.session.commit()
+        else:
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id, domain=domain, role="system", content=system_message
+                )
             )
-        )
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id,
-                domain=domain,
-                role="user",
-                content=str(context)[:2000],
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="user",
+                    content=str(context)[:2000],
+                )
             )
-        )
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id,
-                domain=domain,
-                role="assistant",
-                content=resp_text,
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="assistant",
+                    content=resp_text,
+                )
             )
-        )
-        db.session.commit()
+            db.session.commit()
 
     # -------------------------
     # Parse response
