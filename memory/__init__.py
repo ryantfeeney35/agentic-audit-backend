@@ -1,0 +1,1 @@
+"""Memory package: persistent chat memory and semantic recall utilities."""

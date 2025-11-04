@@ -1,15 +1,23 @@
 # agents/orchestrator.py
 import logging
 from .base_agent import run_agent
-from .context_builder import build_audit_context, build_audio_context
+from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context
 from .schemas import StepType
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
+from memory.config import memory_enabled
+from memory import chat_memory as chatmem
 from sqlalchemy import func
 import tempfile
 import os
 import traceback
-from openai import OpenAI
+# OpenAI is optional at runtime; guard import for environments without the package
+try:
+    from openai import OpenAI  # type: ignore
+except Exception:  # pragma: no cover - import guard
+    OpenAI = None  # type: ignore
 from urllib.request import urlopen
+from memory.config import semantic_enabled
+from memory.semantic import upsert_embeddings_for_audit
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +32,12 @@ class OrchestratorAgent:
     # --- Conversation utilities ---
     def _save_message(self, role: str, domain: str, content: str):
         logger.debug("💾 Saving message: role=%s, domain=%s, content=%s", role, domain, content[:300])
+        if memory_enabled():
+            try:
+                chatmem.save_message(self.audit_id, domain, role, content)
+                return None
+            except Exception:
+                pass
         msg = AgentConversation(
             audit_id=self.audit_id,
             role=role,
@@ -36,6 +50,16 @@ class OrchestratorAgent:
 
     def _get_history(self) -> str:
         """Return formatted conversation history excluding orchestrator summaries."""
+        # Prefer memory-backed recent messages if enabled
+        if memory_enabled():
+            try:
+                msgs = chatmem.get_recent_messages(self.audit_id, limit=24)
+                # Filter orchestrator assistant summaries (assistant role, orchestrator domain)
+                filtered = [m for m in msgs if not (m.startswith("[assistant]") and "[orchestrator]" in m)]
+                if filtered:
+                    return "\n".join(filtered)
+            except Exception:
+                pass
         rows = (
             AgentConversation.query
             .filter_by(audit_id=self.audit_id)
@@ -52,7 +76,7 @@ class OrchestratorAgent:
     # --- Bootstrap orchestration ---
     def bootstrap(self) -> str:
         logger.info("🚀 Orchestrator bootstrap started (audit_id=%s)", self.audit_id)
-        context = build_audit_context(self.audit_id)
+        context = get_audit_memory_context(self.audit_id)
         logger.info("📄 Context built (len=%d)", len(context))
 
         outputs = {}
@@ -77,7 +101,12 @@ class OrchestratorAgent:
 
         final_reply = "Summary:\n" + "\n".join(summary_parts or ["No summaries produced."])
         if followups:
-            final_reply += "\n\nFollow-up Questions:\n- " + "\n- ".join(list(dict.fromkeys(followups)))
+            # Dedupe and limit to 10 total follow-up questions
+            deduped = list(dict.fromkeys(followups))[:10]
+            if deduped:
+                final_reply += "\n\nFollow-up Questions:\n- " + "\n- ".join(deduped)
+            else:
+                final_reply += "\n\n✅ No further follow-up questions. Proceed to recommendations."
         else:
             final_reply += "\n\n✅ No further follow-up questions. Proceed to recommendations."
 
@@ -90,11 +119,10 @@ class OrchestratorAgent:
         logger.info("💬 Handling user answer (audit_id=%s)", self.audit_id)
         self._save_message("user", "orchestrator", user_answer)
 
-        full_context = build_audit_context(self.audit_id)
-        self._save_message("system", "orchestrator", f"[FULL CONTEXT SNAPSHOT]\n{full_context[:2000]}...")
+        memory_context = get_audit_memory_context(self.audit_id)
+        self._save_message("system", "orchestrator", f"[FULL CONTEXT SNAPSHOT]\n{memory_context[:2000]}...")
 
-        history = self._get_history()
-        agent_context = f"Conversation so far:\n{history}\n\nLatest user answer:\n{user_answer}"
+        agent_context = f"{memory_context}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
         for domain in ["insulation", "siding", "hvac", "interior"]:
@@ -112,7 +140,12 @@ class OrchestratorAgent:
                 followups.extend(result["followup_questions"])
 
         if followups:
-            final_reply = "Follow-up Questions:\n- " + "\n- ".join(list(dict.fromkeys(followups)))
+            # Dedupe and limit to 10 total follow-up questions
+            deduped = list(dict.fromkeys(followups))[:10]
+            if deduped:
+                final_reply = "Follow-up Questions:\n- " + "\n- ".join(deduped)
+            else:
+                final_reply = "✅ No further follow-up questions. Proceed to recommendations."
         else:
             final_reply = "✅ No further follow-up questions. Proceed to recommendations."
 
@@ -139,7 +172,13 @@ class OrchestratorAgent:
                 audio_outputs[domain] = {}
 
         # --- Pass 2: Contextual AI recommendations (build full context but explicitly exclude audio-derived summaries) ---
-        context = build_audit_context(self.audit_id, exclude_audio=True)
+        # Refresh semantic embedding index before building context (Phase 3)
+        if semantic_enabled():
+            try:
+                upsert_embeddings_for_audit(self.audit_id)
+            except Exception:
+                logger.debug("upsert_embeddings_for_audit skipped due to error", exc_info=True)
+        context = get_audit_memory_context(self.audit_id, exclude_audio=True)
         logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
         context_outputs = {}
         for domain in domains:
@@ -244,8 +283,8 @@ class OrchestratorAgent:
                 return 0.0
 
         try:
-            # create OpenAI client for embedding calls
-            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # create OpenAI client for embedding calls (if library available)
+            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY')) if OpenAI else None
         except Exception:
             emb_client = None
 
@@ -370,9 +409,12 @@ class OrchestratorAgent:
 
             # Transcribe using OpenAI speech-to-text helper (same model used elsewhere)
             try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if OpenAI else None
                 with open(tmp_path, "rb") as fh:
-                    transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                    if client:
+                        transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                    else:
+                        transcript = ""
                 logger.info("process_recommendation_audio: transcription complete (len=%d)", len(transcript) if transcript else 0)
             except Exception as e:
                 logger.exception("Transcription failed: %s", e)

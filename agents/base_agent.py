@@ -5,6 +5,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
+    BootstrapOutput,
     ExteriorSidingSchema,
     InteriorRoomSchema,
     HVACSchema,
@@ -12,6 +13,8 @@ from .schemas import (
     InterviewSchema,
 )
 from models import AgentConversation, db
+from memory.config import memory_enabled
+from memory import chat_memory as chatmem
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -50,11 +53,31 @@ def run_agent(
     audit_id: int | None = None,
     mode: str = "followup",  # "bootstrap" | "followup" | "recommendations" | "media"
 ) -> dict:
+    """Run a domain agent against the provided context.
+
+    Special handling: when invoked in recommendations mode for the orchestrator's
+    audio-only pass, we may receive a dict like {"type": "audio_pass", "text": "..."}.
+    If the audio text is empty, short-circuit and return an empty recommendations list
+    to avoid generic, unsupported suggestions.
+    """
     # Pick parser based on mode/domain
     if mode == "media" and domain in MEDIA_SCHEMAS:
         parser = PydanticOutputParser(pydantic_object=MEDIA_SCHEMAS[domain])
+    elif mode == "bootstrap":
+        # In bootstrap flows, require a summary using a stricter schema
+        parser = PydanticOutputParser(pydantic_object=BootstrapOutput)
     else:
         parser = PydanticOutputParser(pydantic_object=AgentOutput)
+
+    # Guard: audio recommendations pass with empty transcript should yield no recs
+    if (
+        mode == "recommendations"
+        and isinstance(context, dict)
+        and context.get("type") == "audio_pass"
+        and not (context.get("text") or "").strip()
+    ):
+        logger.debug("run_agent: audio_pass with empty text -> returning empty recommendations")
+        return {"summary": "", "followup_questions": [], "recommendations": []}
 
     # -------------------------
     # System instructions
@@ -92,24 +115,56 @@ def run_agent(
                 "- Return structured JSON using the ExteriorMediaOutput schema."
             )
     elif mode == "bootstrap":
-        system_instructions = (
-            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Always return JSON conforming to AgentOutput.\n"
-            "- Fill BOTH `summary` and `followup_questions`."
-        )
+        system_instructions = f"""
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol. Focus ONLY on {domain}.
+            - Always return JSON conforming to AgentOutput.
+            - Fill BOTH `summary` and `followup_questions`.
+
+            Start by producing a concise `summary` of the current {domain} findings
+            based on the provided context, then identify up to 10 precise follow-up questions
+            needed to complete the data required for recommendations.
+
+            Guidelines:
+            - Review the provided context carefully and identify factual gaps.
+            - Ask at most 10 questions that would help complete your understanding.
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            - Avoid repeating information already covered in the context.
+            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
+            - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            """
     elif mode == "recommendations":
+        # If this is the orchestrator's audio-only pass, constrain behavior tightly
+        is_audio_only = isinstance(context, dict) and context.get("type") == "audio_pass"
+        extra = (
+            "\n- You are running in audio-only mode. Use ONLY the provided transcript text. "
+            "If the transcript lacks actionable details, return an empty `recommendations` list."
+            if is_audio_only
+            else ""
+        )
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Always return JSON conforming to AgentOutput.\n"
-            "- Recommendation type should be appropriate for the domain ({domain})\n"
+            f"- Recommendation type should be appropriate for the domain ({domain})\n"
             "- Populate ONLY `recommendations`."
+            + extra
         )
     else:  # followup
-        system_instructions = (
-            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Always return JSON conforming to AgentOutput.\n"
-            "- Only output `followup_questions`."
-        )
+        system_instructions = f"""
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol.
+
+            Your task is to generate follow-up questions that will fill in missing information
+            required to produce precise and technically valid upgrade recommendations
+            for this home's {domain} systems.
+
+            Guidelines:
+            - Review the provided context carefully and identify factual gaps.
+            - Ask at most 10 questions that would help complete your understanding.
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            - Avoid repeating information already covered in the context.
+            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
+            - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            - Return JSON conforming to AgentOutput, with all questions listed under `followup_questions`.
+            """
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 
@@ -177,28 +232,58 @@ def run_agent(
     # Persist conversation (only for interactive modes)
     # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id, domain=domain, role="system", content=system_message
+        if memory_enabled():
+            try:
+                chatmem.save_message(audit_id, domain, "system", system_message)
+                chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
+                chatmem.save_message(audit_id, domain, "assistant", resp_text)
+            except Exception:
+                # Fallback to legacy DB writes on failure
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id, domain=domain, role="system", content=system_message
+                    )
+                )
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id,
+                        domain=domain,
+                        role="user",
+                        content=str(context)[:2000],
+                    )
+                )
+                db.session.add(
+                    AgentConversation(
+                        audit_id=audit_id,
+                        domain=domain,
+                        role="assistant",
+                        content=resp_text,
+                    )
+                )
+                db.session.commit()
+        else:
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id, domain=domain, role="system", content=system_message
+                )
             )
-        )
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id,
-                domain=domain,
-                role="user",
-                content=str(context)[:2000],
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="user",
+                    content=str(context)[:2000],
+                )
             )
-        )
-        db.session.add(
-            AgentConversation(
-                audit_id=audit_id,
-                domain=domain,
-                role="assistant",
-                content=resp_text,
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="assistant",
+                    content=resp_text,
+                )
             )
-        )
-        db.session.commit()
+            db.session.commit()
 
     # -------------------------
     # Parse response

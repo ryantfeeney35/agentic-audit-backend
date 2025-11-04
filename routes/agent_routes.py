@@ -1,6 +1,8 @@
 # routes/agent_routes.py
 from flask import Blueprint, jsonify, request
 from models import AgentConversation, Audit, AuditStep, db
+from memory.config import memory_enabled
+from memory import chat_memory as chatmem
 import logging
 from agents.base_agent import run_agent
 from agents.utils import merge_agent_outputs
@@ -18,6 +20,25 @@ bp = Blueprint("agent_review", __name__)
 # ----------------------------
 def get_conversation_history(audit_id):
     """Retrieve all messages for an audit, ordered by creation time."""
+    # Prefer memory-backed recent messages if enabled; format into role/domain content
+    if memory_enabled():
+        try:
+            msgs = chatmem.get_recent_messages(audit_id, limit=50)
+            out = []
+            for m in msgs:
+                # Expect format like: [role] [domain-tagged content] or [role] content
+                role = "user" if m.startswith("[user]") else ("assistant" if m.startswith("[ai]") else "system")
+                content = m.split("] ", 1)[1] if "] " in m else m
+                # try to parse domain marker [domain]
+                domain = "orchestrator"
+                if content.startswith("[") and "]" in content:
+                    domain = content[1:content.index("]")]
+                    content = content[content.index("]") + 2 :]
+                out.append({"role": role, "content": content, "domain": domain})
+            if out:
+                return out
+        except Exception:
+            pass
     rows = (
         AgentConversation.query
         .filter_by(audit_id=audit_id)
@@ -29,6 +50,13 @@ def get_conversation_history(audit_id):
 
 def save_message(audit_id, domain, role, content):
     """Save a single conversation message."""
+    # Attempt memory-backed persistence first
+    if memory_enabled():
+        try:
+            chatmem.save_message(audit_id, domain, role, content)
+            # also write to legacy table for compatibility with existing UI queries
+        except Exception:
+            pass
     msg = AgentConversation(
         audit_id=audit_id,
         domain=domain,
