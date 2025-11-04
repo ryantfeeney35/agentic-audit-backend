@@ -5,6 +5,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
+    BootstrapOutput,
     ExteriorSidingSchema,
     InteriorRoomSchema,
     HVACSchema,
@@ -52,11 +53,31 @@ def run_agent(
     audit_id: int | None = None,
     mode: str = "followup",  # "bootstrap" | "followup" | "recommendations" | "media"
 ) -> dict:
+    """Run a domain agent against the provided context.
+
+    Special handling: when invoked in recommendations mode for the orchestrator's
+    audio-only pass, we may receive a dict like {"type": "audio_pass", "text": "..."}.
+    If the audio text is empty, short-circuit and return an empty recommendations list
+    to avoid generic, unsupported suggestions.
+    """
     # Pick parser based on mode/domain
     if mode == "media" and domain in MEDIA_SCHEMAS:
         parser = PydanticOutputParser(pydantic_object=MEDIA_SCHEMAS[domain])
+    elif mode == "bootstrap":
+        # In bootstrap flows, require a summary using a stricter schema
+        parser = PydanticOutputParser(pydantic_object=BootstrapOutput)
     else:
         parser = PydanticOutputParser(pydantic_object=AgentOutput)
+
+    # Guard: audio recommendations pass with empty transcript should yield no recs
+    if (
+        mode == "recommendations"
+        and isinstance(context, dict)
+        and context.get("type") == "audio_pass"
+        and not (context.get("text") or "").strip()
+    ):
+        logger.debug("run_agent: audio_pass with empty text -> returning empty recommendations")
+        return {"summary": "", "followup_questions": [], "recommendations": []}
 
     # -------------------------
     # System instructions
@@ -112,11 +133,20 @@ def run_agent(
             - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
             """
     elif mode == "recommendations":
+        # If this is the orchestrator's audio-only pass, constrain behavior tightly
+        is_audio_only = isinstance(context, dict) and context.get("type") == "audio_pass"
+        extra = (
+            "\n- You are running in audio-only mode. Use ONLY the provided transcript text. "
+            "If the transcript lacks actionable details, return an empty `recommendations` list."
+            if is_audio_only
+            else ""
+        )
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
             "- Always return JSON conforming to AgentOutput.\n"
-            "- Recommendation type should be appropriate for the domain ({domain})\n"
+            f"- Recommendation type should be appropriate for the domain ({domain})\n"
             "- Populate ONLY `recommendations`."
+            + extra
         )
     else:  # followup
         system_instructions = f"""

@@ -108,9 +108,25 @@ class InterviewSchema(BaseModel):
 # Agent Output (generic wrapper)
 # -------------------------
 class AgentOutput(BaseModel):
+    # Summary is optional in the generic shape to allow recs-only calls,
+    # but bootstrap flows should use BootstrapOutput (which requires summary).
     summary: Optional[str] = Field(None)
     followup_questions: List[str] = Field(default_factory=list)
     recommendations: List[Recommendation] = Field(default_factory=list)
 
     def json(self) -> str:
         return self.model_dump_json(indent=2)
+
+# -------------------------
+# Mode-specific stricter outputs
+# -------------------------
+class BootstrapOutput(BaseModel):
+    # In bootstrap, we require a summary to be present.
+    summary: str = Field(
+        ...,
+        description="Concise narrative summary of current domain findings based on context provided",
+    )
+    # Ask at most 10, but schema allows a list; prompt will enforce limits.
+    followup_questions: List[str] = Field(default_factory=list)
+    # Keep recommendations field for shape compatibility, but it's not required in bootstrap.
+    recommendations: List[Recommendation] = Field(default_factory=list)
