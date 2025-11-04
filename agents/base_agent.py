@@ -95,7 +95,9 @@ def run_agent(
             )
     elif mode == "bootstrap":
         system_instructions = f"""
-            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol.
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol. Focus ONLY on {domain}.
+            - Always return JSON conforming to AgentOutput.
+            - Fill BOTH `summary` and `followup_questions`.
 
             Start by producing a concise `summary` of the current {domain} findings
             based on the provided context, then identify up to 10 precise follow-up questions
@@ -108,7 +110,6 @@ def run_agent(
             - Avoid repeating information already covered in the context.
             - Do NOT ask if the user wants recommendations — recommendations are always the next step.
             - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
-            - Return JSON conforming to AgentOutput, with all questions listed under `followup_questions`.
             """
     elif mode == "recommendations":
         system_instructions = (
