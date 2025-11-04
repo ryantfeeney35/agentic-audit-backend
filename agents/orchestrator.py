@@ -10,7 +10,11 @@ from sqlalchemy import func
 import tempfile
 import os
 import traceback
-from openai import OpenAI
+# OpenAI is optional at runtime; guard import for environments without the package
+try:
+    from openai import OpenAI  # type: ignore
+except Exception:  # pragma: no cover - import guard
+    OpenAI = None  # type: ignore
 from urllib.request import urlopen
 from memory.config import semantic_enabled
 from memory.semantic import upsert_embeddings_for_audit
@@ -97,7 +101,12 @@ class OrchestratorAgent:
 
         final_reply = "Summary:\n" + "\n".join(summary_parts or ["No summaries produced."])
         if followups:
-            final_reply += "\n\nFollow-up Questions:\n- " + "\n- ".join(list(dict.fromkeys(followups)))
+            # Dedupe and limit to 10 total follow-up questions
+            deduped = list(dict.fromkeys(followups))[:10]
+            if deduped:
+                final_reply += "\n\nFollow-up Questions:\n- " + "\n- ".join(deduped)
+            else:
+                final_reply += "\n\n✅ No further follow-up questions. Proceed to recommendations."
         else:
             final_reply += "\n\n✅ No further follow-up questions. Proceed to recommendations."
 
@@ -131,7 +140,12 @@ class OrchestratorAgent:
                 followups.extend(result["followup_questions"])
 
         if followups:
-            final_reply = "Follow-up Questions:\n- " + "\n- ".join(list(dict.fromkeys(followups)))
+            # Dedupe and limit to 10 total follow-up questions
+            deduped = list(dict.fromkeys(followups))[:10]
+            if deduped:
+                final_reply = "Follow-up Questions:\n- " + "\n- ".join(deduped)
+            else:
+                final_reply = "✅ No further follow-up questions. Proceed to recommendations."
         else:
             final_reply = "✅ No further follow-up questions. Proceed to recommendations."
 
@@ -269,8 +283,8 @@ class OrchestratorAgent:
                 return 0.0
 
         try:
-            # create OpenAI client for embedding calls
-            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # create OpenAI client for embedding calls (if library available)
+            emb_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY')) if OpenAI else None
         except Exception:
             emb_client = None
 
@@ -395,9 +409,12 @@ class OrchestratorAgent:
 
             # Transcribe using OpenAI speech-to-text helper (same model used elsewhere)
             try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if OpenAI else None
                 with open(tmp_path, "rb") as fh:
-                    transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                    if client:
+                        transcript = client.audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=fh).text.strip()
+                    else:
+                        transcript = ""
                 logger.info("process_recommendation_audio: transcription complete (len=%d)", len(transcript) if transcript else 0)
             except Exception as e:
                 logger.exception("Transcription failed: %s", e)

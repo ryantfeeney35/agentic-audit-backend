@@ -94,11 +94,22 @@ def run_agent(
                 "- Return structured JSON using the ExteriorMediaOutput schema."
             )
     elif mode == "bootstrap":
-        system_instructions = (
-            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Always return JSON conforming to AgentOutput.\n"
-            "- Fill BOTH `summary` and `followup_questions`."
-        )
+        system_instructions = f"""
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol.
+
+            Start by producing a concise `summary` of the current {domain} findings
+            based on the provided context, then identify up to 10 precise follow-up questions
+            needed to complete the data required for recommendations.
+
+            Guidelines:
+            - Review the provided context carefully and identify factual gaps.
+            - Ask at most 10 questions that would help complete your understanding.
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            - Avoid repeating information already covered in the context.
+            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
+            - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            - Return JSON conforming to AgentOutput, with all questions listed under `followup_questions`.
+            """
     elif mode == "recommendations":
         system_instructions = (
             f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
@@ -107,11 +118,22 @@ def run_agent(
             "- Populate ONLY `recommendations`."
         )
     else:  # followup
-        system_instructions = (
-            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
-            "- Always return JSON conforming to AgentOutput.\n"
-            "- Only output `followup_questions`."
-        )
+        system_instructions = f"""
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol.
+
+            Your task is to generate follow-up questions that will fill in missing information
+            required to produce precise and technically valid upgrade recommendations
+            for this home's {domain} systems.
+
+            Guidelines:
+            - Review the provided context carefully and identify factual gaps.
+            - Ask at most 10 questions that would help complete your understanding.
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            - Avoid repeating information already covered in the context.
+            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
+            - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            - Return JSON conforming to AgentOutput, with all questions listed under `followup_questions`.
+            """
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
 

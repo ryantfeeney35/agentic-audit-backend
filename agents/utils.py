@@ -1,10 +1,4 @@
 # agents/utils.py
-from openai import OpenAI
-import os
-
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# agents/utils.py
 def merge_agent_outputs(agent_replies: list, bootstrap: bool = False) -> str:
     """
     Merge structured agent outputs.
@@ -26,6 +20,8 @@ def merge_agent_outputs(agent_replies: list, bootstrap: bool = False) -> str:
             questions.extend([str(q) for q in fq])
 
     questions = list(dict.fromkeys(q.strip() for q in questions if q.strip()))  # dedupe
+    # Cap total follow-up questions to 10
+    questions = questions[:10]
 
     if bootstrap:
         summary_block = "Summary:\n" + ("\n".join(summaries) if summaries else "No summaries produced.")
