@@ -7,6 +7,7 @@ from .schemas import (
     AgentOutput,
     BootstrapOutput,
     ExteriorSidingSchema,
+    ExteriorMediaSchema,
     InteriorRoomSchema,
     HVACSchema,
     InsulationSchema,
@@ -23,7 +24,7 @@ llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
 # Map domains to media schemas
 MEDIA_SCHEMAS = {
-    "exterior": ExteriorSidingSchema,
+    "exterior": ExteriorMediaSchema,
     "hvac": HVACSchema,
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
@@ -108,11 +109,15 @@ def run_agent(
         else:  # exterior
             system_instructions = (
                 "You are the Exterior Agent (CREIA protocol).\n"
-                "- Detect orientation (if possible)\n"
-                "- Note shading and glass–wall ratio\n"
-                "- Identify siding type\n"
-                "- Highlight comfort/efficiency impacts\n"
-                "- Return structured JSON using the ExteriorMediaOutput schema."
+                "Your task is to analyze exterior photos for both siding context and ventilation.\n"
+                "Requirements:\n"
+                "- Detect orientation (if possible), shading, glass–wall ratio, and siding type.\n"
+                "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space; identify powered vents/whole-house fan if visible.\n"
+                "- For each vent: infer function (intake/exhaust/unknown), location (eave/gable/ridge/crawl space/roof), and condition (good/blocked/painted_over/damaged/missing/unknown).\n"
+                "- Evaluate ventilation balance in plain language and note any signs of moisture staining/mold near vents.\n"
+                "- Provide a CREIA-aligned recommendation with a short rationale.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "- Return structured JSON using the ExteriorMediaSchema."
             )
     elif mode == "bootstrap":
         system_instructions = f"""
