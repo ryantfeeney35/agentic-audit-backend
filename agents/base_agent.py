@@ -12,6 +12,7 @@ from .schemas import (
     HVACSchema,
     InsulationSchema,
     InterviewSchema,
+    RoofMediaSchema,
 )
 from models import AgentConversation, db
 from memory.config import memory_enabled
@@ -29,6 +30,7 @@ MEDIA_SCHEMAS = {
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
     "interior": InteriorRoomSchema,
+    "roof": RoofMediaSchema,
 }
 
 
@@ -98,6 +100,20 @@ def run_agent(
                 "- Assess ducting (sealing, insulation, asbestos tape)\n"
                 "- Flag safety/efficiency issues\n"
                 "- Return structured JSON using the HVACMediaOutput schema."
+            )
+        elif domain == "roof":
+            system_instructions = (
+                "You are the Roof Agent (CREIA protocol).\n"
+                "Your task is to analyze roof photos/videos for finish, color, ventilation elements, shading, and condition issues.\n"
+                "Requirements:\n"
+                "- Identify roof finish type (e.g., composition shingle, tile, metal, rolled).\n"
+                "- Identify roof color (light/medium/dark or a short descriptive color).\n"
+                "- Detect visible roof ventilation elements: ridge vent, gable vent, turbine/powered fans, soffit intake at eaves; classify using ExteriorVent with type/function/location/condition/is_obstructed/confidence.\n"
+                "- Describe shading context (none/partial/heavy and brief source if visible such as trees/adjacent buildings).\n"
+                "- List condition issues (e.g., missing shingles, lifted edges, debris, broken tiles, ponding).\n"
+                "- Provide a concise CREIA-aligned summary and a roof-specific recommendation.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "- Return structured JSON using the RoofMediaSchema."
             )
         elif domain == "interior":
             system_instructions = (

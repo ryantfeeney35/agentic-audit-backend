@@ -89,6 +89,17 @@ class ExteriorMediaSchema(BaseModel):
     # New ventilation assessment block
     vent_assessment: ExteriorVentAssessment
 
+class RoofMediaSchema(BaseModel):
+    finish_type: str
+    color: str
+    visible_vents: List[ExteriorVent] = Field(default_factory=list, description="List of visible roof ventilation elements")
+    shading: str
+    condition_issues: List[str] = Field(default_factory=list)
+    summary: str
+    followup_questions: List[str] = Field(default_factory=list)
+    recommendation: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
 class InteriorRoomSchema(BaseModel):
     room_type: str
     ceiling_height: str
