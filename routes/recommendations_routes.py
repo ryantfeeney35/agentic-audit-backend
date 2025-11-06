@@ -280,11 +280,36 @@ def patch_recommendation_roi_inputs(audit_id, rec_id):
     # Merge and persist roi_inputs
     try:
         cur = rec.roi_inputs or {}
-        cur.update({k: payload.get(k) for k in payload.keys()})
+        # Coerce incoming values: convert numeric-like strings to numbers and drop empty strings
+        for k, v in payload.items():
+            # normalize empty strings -> remove key
+            if isinstance(v, str) and v.strip() == "":
+                if k in cur:
+                    cur.pop(k, None)
+                continue
+
+            # attempt to coerce numeric strings to numbers
+            if isinstance(v, str):
+                try:
+                    num = float(v)
+                    # if the string represents an integer value, keep as int
+                    if num.is_integer():
+                        cur[k] = int(num)
+                    else:
+                        cur[k] = num
+                    continue
+                except ValueError:
+                    # not a numeric string, keep as-is
+                    pass
+
+            # otherwise persist value as provided (number, bool, etc.)
+            cur[k] = v
+
         rec.roi_inputs = cur
         db.session.commit()
     except Exception as e:
         db.session.rollback()
+        current_app.logger.exception("Failed to persist roi_inputs for rec %s: %s", rec_id, e)
         abort(500, description=f"Failed to update ROI inputs: {e}")
 
     # Optionally compute and persist ROI-derived numeric fields for attic insulation
