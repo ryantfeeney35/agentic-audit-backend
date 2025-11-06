@@ -3,7 +3,7 @@ import logging
 from .base_agent import run_agent
 from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context
 from .schemas import StepType
-from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep
+from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 from sqlalchemy import func
@@ -159,14 +159,55 @@ class OrchestratorAgent:
         # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
         domains = ["insulation", "siding", "hvac", "interior"]
 
+        # --- ROI-aware context scaffolding (minimal change)
+        # Pull audit-level defaults and property sqft so ROI enrichment can run deterministically
+        try:
+            audit_rec = Audit.query.get(self.audit_id)
+        except Exception:
+            audit_rec = None
+
+        roi_defaults = (audit_rec.roi_defaults if audit_rec and isinstance(audit_rec.roi_defaults, dict) else {})
+        property_sqft = None
+        try:
+            if audit_rec and audit_rec.property and audit_rec.property.sqft:
+                property_sqft = float(audit_rec.property.sqft)
+        except Exception:
+            property_sqft = None
+
+        def _roi_payload(text: str, is_audio: bool = False) -> dict:
+            payload = {"text": text}
+            if is_audio:
+                payload["type"] = "audio_pass"
+            # Thread through ROI-related keys expected by enrich_recommendations_with_roi
+            if property_sqft is not None:
+                payload["property_sqft"] = property_sqft
+            try:
+                payload["energy_rate_usd_per_kwh"] = float(roi_defaults.get("energy_rate_usd_per_kwh", 0.20))
+            except Exception:
+                payload["energy_rate_usd_per_kwh"] = 0.20
+            try:
+                payload["analysis_horizon_years"] = int(roi_defaults.get("analysis_horizon_years", 25))
+            except Exception:
+                payload["analysis_horizon_years"] = 25
+            try:
+                payload["climate"] = str(roi_defaults.get("climate", "mild"))
+            except Exception:
+                payload["climate"] = "mild"
+            return payload
+
         # --- Pass 1: Audio-derived recommendations ---
         audio_context = build_audio_context(self.audit_id)
         logger.info("🔊 Audio pass context length=%d", len(audio_context or ""))
         audio_outputs = {}
         for domain in domains:
             try:
-                # Pass a keyed dict so tests/mocks can detect audio-pass vs context-pass.
-                audio_outputs[domain] = run_agent(domain, {"type": "audio_pass", "text": audio_context}, audit_id=self.audit_id, mode="recommendations")
+                # Pass a dict with ROI keys so enrichment has inputs available.
+                audio_outputs[domain] = run_agent(
+                    domain,
+                    _roi_payload(audio_context, is_audio=True),
+                    audit_id=self.audit_id,
+                    mode="recommendations",
+                )
             except Exception:
                 logger.exception("❌ %s agent failed during audio recommendations", domain)
                 audio_outputs[domain] = {}
@@ -183,7 +224,13 @@ class OrchestratorAgent:
         context_outputs = {}
         for domain in domains:
             try:
-                context_outputs[domain] = run_agent(domain, context, audit_id=self.audit_id, mode="recommendations")
+                # Send the structured context inside a dict along with ROI keys.
+                context_outputs[domain] = run_agent(
+                    domain,
+                    _roi_payload(context, is_audio=False),
+                    audit_id=self.audit_id,
+                    mode="recommendations",
+                )
             except Exception:
                 logger.exception("❌ %s agent failed during contextual recommendations", domain)
                 context_outputs[domain] = {}
@@ -249,6 +296,7 @@ class OrchestratorAgent:
                     return None
 
             step_type = _normalize_step(raw_step)
+            # Build the ORM row
             r = AuditRecommendation(
                 audit_id=self.audit_id,
                 step_type=step_type or "General",
@@ -261,6 +309,57 @@ class OrchestratorAgent:
                 # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
                 source=(rec.get("_source_pass") or "ai"),
             )
+
+            # Opportunistically persist ROI inputs for attic insulation so the UI/API
+            # can refine or compute later, even when deterministic enrichment didn't run.
+            try:
+                if (r.step_type or "").lower() == "insulation" and "attic" in (summary or "").lower():
+                    roi_inputs: dict = {}
+                    # Derive attic area from property sqft when available (35% heuristic)
+                    if property_sqft is not None:
+                        try:
+                            roi_inputs["attic_area_sqft"] = round(float(property_sqft) * 0.35, 2)
+                        except Exception:
+                            pass
+
+                    # Target R: parse from summary like "R-38" or "R 38"
+                    try:
+                        import re
+                        m = re.search(r"\bR[-\s]?(\d+(?:\.\d+)?)\b", str(summary))
+                        if m:
+                            roi_inputs["attic_target_r"] = float(m.group(1))
+                    except Exception:
+                        pass
+
+                    # Net cost: prefer explicit field from agent; fallback to existing upgrade_cost_usd
+                    try:
+                        net_cost_val = rec.get("net_upgrade_cost_usd")
+                        if net_cost_val is None:
+                            net_cost_val = rec.get("upgrade_cost_usd")
+                        if net_cost_val is not None:
+                            roi_inputs["net_upgrade_cost_usd"] = float(net_cost_val)
+                    except Exception:
+                        pass
+
+                    # Audit defaults
+                    try:
+                        roi_inputs["energy_rate_usd_per_kwh"] = float(roi_defaults.get("energy_rate_usd_per_kwh", 0.20))
+                    except Exception:
+                        pass
+                    try:
+                        roi_inputs["analysis_horizon_years"] = int(roi_defaults.get("analysis_horizon_years", 25))
+                    except Exception:
+                        pass
+                    try:
+                        roi_inputs["climate"] = str(roi_defaults.get("climate", "mild"))
+                    except Exception:
+                        pass
+
+                    if roi_inputs:
+                        r.roi_inputs = roi_inputs
+            except Exception:
+                # Non-fatal if roi_inputs hydration fails
+                pass
             db.session.add(r)
             saved.append(r)
         db.session.commit()

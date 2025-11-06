@@ -31,6 +31,75 @@ class ExteriorSidingSchema(BaseModel):
     ea_analysis: str
     summary: str
 
+# -------------------------
+# Exterior ventilation assessment (composite media schema)
+# -------------------------
+class VentType(str, Enum):
+    SOFFIT = "soffit"
+    GABLE = "gable"
+    RIDGE = "ridge"
+    CRAWL_SPACE = "crawl_space"
+    POWERED = "powered"
+
+
+class VentFunction(str, Enum):
+    INTAKE = "intake"
+    EXHAUST = "exhaust"
+    UNKNOWN = "unknown"
+
+
+class VentCondition(str, Enum):
+    GOOD = "good"
+    BLOCKED = "blocked"
+    PAINTED_OVER = "painted_over"
+    DAMAGED = "damaged"
+    MISSING = "missing"
+    UNKNOWN = "unknown"
+
+
+class ExteriorVent(BaseModel):
+    type: VentType = Field(..., description="Vent type classification")
+    function: VentFunction = Field(..., description="Intake, exhaust, or unknown")
+    location: str = Field(..., description="Approx site on exterior: eave/soffit, gable, ridge, crawl space, roof")
+    condition: VentCondition = Field(..., description="Observed condition classification")
+    notes: Optional[str] = Field(default=None, description="Short factual note if helpful")
+    is_obstructed: bool = Field(..., description="True if visibly obstructed/covered/blocked")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Detection confidence 0..1")
+
+
+class ExteriorVentAssessment(BaseModel):
+    detected_vents: List[ExteriorVent] = Field(default_factory=list)
+    balance: str = Field(..., description="Assessment of intake/exhaust balance in plain language")
+    moisture_signs: List[str] = Field(default_factory=list, description="Observed stains/mold near vents")
+    issues: List[str] = Field(default_factory=list, description="Key issues such as blocked/missing/damaged vents")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    followup_questions: List[str] = Field(default_factory=list)
+    recommendation: str = Field(..., description="CREIA-aligned recommendation text with short rationale")
+
+
+class ExteriorMediaSchema(BaseModel):
+    # Keep original exterior fields for backward compatibility
+    orientation: str
+    siding_type: str
+    shading: str
+    glass_wall_ratio: str
+    ea_analysis: str
+    summary: str
+
+    # New ventilation assessment block
+    vent_assessment: ExteriorVentAssessment
+
+class RoofMediaSchema(BaseModel):
+    finish_type: str
+    color: str
+    visible_vents: List[ExteriorVent] = Field(default_factory=list, description="List of visible roof ventilation elements")
+    shading: str
+    condition_issues: List[str] = Field(default_factory=list)
+    summary: str
+    followup_questions: List[str] = Field(default_factory=list)
+    recommendation: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
 class InteriorRoomSchema(BaseModel):
     room_type: str
     ceiling_height: str

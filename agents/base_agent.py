@@ -6,12 +6,16 @@ from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
     BootstrapOutput,
+    StepType,
     ExteriorSidingSchema,
+    ExteriorMediaSchema,
     InteriorRoomSchema,
     HVACSchema,
     InsulationSchema,
     InterviewSchema,
+    RoofMediaSchema,
 )
+from .roi import enrich_recommendations_with_roi
 from models import AgentConversation, db
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
@@ -23,11 +27,12 @@ llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
 # Map domains to media schemas
 MEDIA_SCHEMAS = {
-    "exterior": ExteriorSidingSchema,
+    "exterior": ExteriorMediaSchema,
     "hvac": HVACSchema,
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
     "interior": InteriorRoomSchema,
+    "roof": RoofMediaSchema,
 }
 
 
@@ -98,6 +103,20 @@ def run_agent(
                 "- Flag safety/efficiency issues\n"
                 "- Return structured JSON using the HVACMediaOutput schema."
             )
+        elif domain == "roof":
+            system_instructions = (
+                "You are the Roof Agent (CREIA protocol).\n"
+                "Your task is to analyze roof photos/videos for finish, color, ventilation elements, shading, and condition issues.\n"
+                "Requirements:\n"
+                "- Identify roof finish type (e.g., composition shingle, tile, metal, rolled).\n"
+                "- Identify roof color (light/medium/dark or a short descriptive color).\n"
+                "- Detect visible roof ventilation elements: ridge vent, gable vent, turbine/powered fans, soffit intake at eaves; classify using ExteriorVent with type/function/location/condition/is_obstructed/confidence.\n"
+                "- Describe shading context (none/partial/heavy and brief source if visible such as trees/adjacent buildings).\n"
+                "- List condition issues (e.g., missing shingles, lifted edges, debris, broken tiles, ponding).\n"
+                "- Provide a concise CREIA-aligned summary and a roof-specific recommendation.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "- Return structured JSON using the RoofMediaSchema."
+            )
         elif domain == "interior":
             system_instructions = (
                 "You are the Interior Agent (CREIA protocol).\n"
@@ -108,11 +127,15 @@ def run_agent(
         else:  # exterior
             system_instructions = (
                 "You are the Exterior Agent (CREIA protocol).\n"
-                "- Detect orientation (if possible)\n"
-                "- Note shading and glass–wall ratio\n"
-                "- Identify siding type\n"
-                "- Highlight comfort/efficiency impacts\n"
-                "- Return structured JSON using the ExteriorMediaOutput schema."
+                "Your task is to analyze exterior photos for both siding context and ventilation.\n"
+                "Requirements:\n"
+                "- Detect orientation (if possible), shading, glass–wall ratio, and siding type.\n"
+                "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space; identify powered vents/whole-house fan if visible.\n"
+                "- For each vent: infer function (intake/exhaust/unknown), location (eave/gable/ridge/crawl space/roof), and condition (good/blocked/painted_over/damaged/missing/unknown).\n"
+                "- Evaluate ventilation balance in plain language and note any signs of moisture staining/mold near vents.\n"
+                "- Provide a CREIA-aligned recommendation with a short rationale.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "- Return structured JSON using the ExteriorMediaSchema."
             )
     elif mode == "bootstrap":
         system_instructions = f"""
@@ -290,6 +313,25 @@ def run_agent(
     # -------------------------
     try:
         parsed = parser.parse(resp_text)
+        # Enrich recommendations with deterministic ROI for supported domains when applicable.
+        try:
+            # Only attempt enrichment for outputs that carry recommendations.
+            if isinstance(parsed, (AgentOutput, BootstrapOutput)):
+                # Map domain string to StepType where possible (only INSULATION currently supported)
+                try:
+                    step_domain = StepType[domain.upper()]
+                except Exception:
+                    step_domain = None
+
+                if step_domain is not None:
+                    ctx_obj = context if isinstance(context, dict) else {}
+
+                    enriched = enrich_recommendations_with_roi(step_domain, parsed.recommendations, ctx_obj)
+                    parsed.recommendations = enriched
+        except Exception:
+            # Do not let enrichment failures break the primary agent flow.
+            logger.debug("ROI enrichment skipped due to error", exc_info=True)
+
         return parsed.model_dump()
     except Exception as e:
         logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)

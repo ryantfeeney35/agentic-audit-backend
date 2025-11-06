@@ -34,6 +34,8 @@ class Audit(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     audit_type = db.Column(db.String(50), nullable=False, default="energy_audit")  
     # values: "energy_audit", "home_inspection_energy_audit"
+    # ROI defaults/settings at the audit level (e.g., energy_rate, climate, horizon)
+    roi_defaults = db.Column(JSONB, default=dict)
 
     # Relationships
     property = relationship("Property", back_populates="audits")
@@ -120,6 +122,8 @@ class AuditRecommendation(db.Model):
     recommended_media_id = db.Column(db.Integer, db.ForeignKey("audit_media.id", ondelete="SET NULL"), nullable=True)
     # Track whether the recommended_media was auto-suggested or auditor-selected
     recommended_media_source = db.Column(db.String, nullable=True)
+    # Per-recommendation ROI inputs (e.g., attic_current_r, attic_target_r, net_upgrade_cost_usd, attic_area_sqft)
+    roi_inputs = db.Column(JSONB, default=dict)
 
     audit = relationship("Audit", back_populates="recommendations")
     # relationship to the suggested media (may be None)

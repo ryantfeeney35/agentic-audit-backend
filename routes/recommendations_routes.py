@@ -1,14 +1,30 @@
 # routes/recommendations_routes.py
 from flask import Blueprint, jsonify, request, abort, current_app
 from agents.orchestrator import OrchestratorAgent
-from models import AuditRecommendation, db, AuditMedia
+from models import AuditRecommendation, db, AuditMedia, Audit
 import tempfile
 import os
 from werkzeug.utils import secure_filename
 from threading import Thread
 from supabase_utils import upload_to_supabase_and_get_url
+from agents.roi import AtticInsulationROIInput, calculate_attic_insulation_roi
 
 bp = Blueprint("recommendations", __name__)
+
+@bp.route("/roi/insulation/attic", methods=["POST"])
+def roi_insulation_attic():
+    """Deterministic ROI calculator for attic insulation upgrades.
+
+    Body must match AtticInsulationROIInput; returns ROIResult JSON.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        inp = AtticInsulationROIInput(**data)
+    except Exception as e:
+        abort(400, description=f"Invalid input: {e}")
+
+    res = calculate_attic_insulation_roi(inp)
+    return jsonify(res.model_dump())
 
 @bp.route("/audits/<int:audit_id>/recommendations", methods=["GET"])
 def get_recommendations(audit_id):
@@ -137,7 +153,9 @@ def serialize_rec(r):
         # recommended media association
         "recommended_media_id": getattr(r, "recommended_media_id", None),
         "recommended_media_source": getattr(r, "recommended_media_source", None),
-        "recommended_media_url": (r.recommended_media.media_url if getattr(r, 'recommended_media', None) else None)
+        "recommended_media_url": (r.recommended_media.media_url if getattr(r, 'recommended_media', None) else None),
+        # ROI inputs persisted per recommendation
+        "roi_inputs": getattr(r, "roi_inputs", None) or {},
     }
 
 
@@ -217,5 +235,112 @@ def patch_recommendation_media(audit_id, rec_id):
     except Exception as e:
         db.session.rollback()
         abort(500, description=f"Failed to update recommended media: {e}")
+
+    return jsonify(serialize_rec(rec))
+
+
+@bp.route("/audits/<int:audit_id>/roi-defaults", methods=["GET"])
+def get_audit_roi_defaults(audit_id):
+    audit = Audit.query.filter_by(id=audit_id).first()
+    if not audit:
+        abort(404, description="Audit not found")
+    return jsonify(audit.roi_defaults or {})
+
+
+@bp.route("/audits/<int:audit_id>/roi-defaults", methods=["PATCH"])
+def patch_audit_roi_defaults(audit_id):
+    audit = Audit.query.filter_by(id=audit_id).first()
+    if not audit:
+        abort(404, description="Audit not found")
+    payload = request.get_json() or {}
+    if not isinstance(payload, dict):
+        abort(400, description="Body must be a JSON object")
+    try:
+        # Merge into a new dict so SQLAlchemy change tracking detects the update
+        base = dict(audit.roi_defaults or {})
+        merged = {**base, **{k: payload[k] for k in payload.keys()}}
+        audit.roi_defaults = merged
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        abort(500, description=f"Failed to update ROI defaults: {e}")
+    return jsonify(audit.roi_defaults or {})
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/roi-inputs", methods=["PATCH"])
+def patch_recommendation_roi_inputs(audit_id, rec_id):
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+
+    payload = request.get_json() or {}
+    if not isinstance(payload, dict):
+        abort(400, description="Body must be a JSON object")
+
+    # Merge and persist roi_inputs
+    try:
+        # Build a new dict copy so SQLAlchemy detects the change (don't mutate the original in-place)
+        base = dict(rec.roi_inputs or {})
+        new_cur = dict(base)
+
+        # Coerce incoming values: convert numeric-like strings to numbers and drop empty strings
+        for k, v in payload.items():
+            # normalize empty strings -> remove key
+            if isinstance(v, str) and v.strip() == "":
+                new_cur.pop(k, None)
+                continue
+
+            # attempt to coerce numeric strings to numbers
+            if isinstance(v, str):
+                try:
+                    num = float(v)
+                    # if the string represents an integer value, keep as int
+                    if num.is_integer():
+                        new_cur[k] = int(num)
+                    else:
+                        new_cur[k] = num
+                    continue
+                except ValueError:
+                    # not a numeric string, keep as-is
+                    pass
+
+            # otherwise persist value as provided (number, bool, etc.)
+            new_cur[k] = v
+
+        rec.roi_inputs = new_cur
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Failed to persist roi_inputs for rec %s: %s", rec_id, e)
+        abort(500, description=f"Failed to update ROI inputs: {e}")
+
+    # Optionally compute and persist ROI-derived numeric fields for attic insulation
+    try:
+        if (rec.step_type or '').lower() == 'insulation' and ('attic' in (rec.summary or '').lower() or 'attic' in (rec.summary_override or '').lower() if rec.summary_override else False):
+            audit = Audit.query.filter_by(id=audit_id).first()
+            defaults = (audit.roi_defaults or {}) if audit else {}
+            # Build input from roi_inputs + defaults
+            area = (rec.roi_inputs or {}).get('attic_area_sqft')
+            current_r = (rec.roi_inputs or {}).get('attic_current_r')
+            target_r = (rec.roi_inputs or {}).get('attic_target_r', 38)
+            net_cost = (rec.roi_inputs or {}).get('net_upgrade_cost_usd')
+            if area and current_r is not None and net_cost:
+                roi_inp = AtticInsulationROIInput(
+                    area_sqft=float(area),
+                    current_r_value=float(current_r),
+                    target_r_value=float(target_r),
+                    energy_rate_usd_per_kwh=float(defaults.get('energy_rate_usd_per_kwh', 0.20)),
+                    net_upgrade_cost_usd=float(net_cost),
+                    analysis_horizon_years=int(defaults.get('analysis_horizon_years', 25)),
+                    climate=str(defaults.get('climate', 'mild')),
+                )
+                res = calculate_attic_insulation_roi(roi_inp)
+                rec.annual_savings_usd = res.annual_savings_usd
+                rec.upgrade_cost_usd = float(net_cost)
+                rec.payback_years = res.payback_years
+                db.session.commit()
+    except Exception:
+        # Non-fatal if compute fails
+        db.session.rollback()
 
     return jsonify(serialize_rec(rec))
