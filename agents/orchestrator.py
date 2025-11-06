@@ -296,6 +296,7 @@ class OrchestratorAgent:
                     return None
 
             step_type = _normalize_step(raw_step)
+            # Build the ORM row
             r = AuditRecommendation(
                 audit_id=self.audit_id,
                 step_type=step_type or "General",
@@ -308,6 +309,57 @@ class OrchestratorAgent:
                 # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
                 source=(rec.get("_source_pass") or "ai"),
             )
+
+            # Opportunistically persist ROI inputs for attic insulation so the UI/API
+            # can refine or compute later, even when deterministic enrichment didn't run.
+            try:
+                if (r.step_type or "").lower() == "insulation" and "attic" in (summary or "").lower():
+                    roi_inputs: dict = {}
+                    # Derive attic area from property sqft when available (35% heuristic)
+                    if property_sqft is not None:
+                        try:
+                            roi_inputs["attic_area_sqft"] = round(float(property_sqft) * 0.35, 2)
+                        except Exception:
+                            pass
+
+                    # Target R: parse from summary like "R-38" or "R 38"
+                    try:
+                        import re
+                        m = re.search(r"\bR[-\s]?(\d+(?:\.\d+)?)\b", str(summary))
+                        if m:
+                            roi_inputs["attic_target_r"] = float(m.group(1))
+                    except Exception:
+                        pass
+
+                    # Net cost: prefer explicit field from agent; fallback to existing upgrade_cost_usd
+                    try:
+                        net_cost_val = rec.get("net_upgrade_cost_usd")
+                        if net_cost_val is None:
+                            net_cost_val = rec.get("upgrade_cost_usd")
+                        if net_cost_val is not None:
+                            roi_inputs["net_upgrade_cost_usd"] = float(net_cost_val)
+                    except Exception:
+                        pass
+
+                    # Audit defaults
+                    try:
+                        roi_inputs["energy_rate_usd_per_kwh"] = float(roi_defaults.get("energy_rate_usd_per_kwh", 0.20))
+                    except Exception:
+                        pass
+                    try:
+                        roi_inputs["analysis_horizon_years"] = int(roi_defaults.get("analysis_horizon_years", 25))
+                    except Exception:
+                        pass
+                    try:
+                        roi_inputs["climate"] = str(roi_defaults.get("climate", "mild"))
+                    except Exception:
+                        pass
+
+                    if roi_inputs:
+                        r.roi_inputs = roi_inputs
+            except Exception:
+                # Non-fatal if roi_inputs hydration fails
+                pass
             db.session.add(r)
             saved.append(r)
         db.session.commit()
