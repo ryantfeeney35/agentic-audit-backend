@@ -7,8 +7,24 @@ import os
 from werkzeug.utils import secure_filename
 from threading import Thread
 from supabase_utils import upload_to_supabase_and_get_url
+from agents.roi import AtticInsulationROIInput, calculate_attic_insulation_roi
 
 bp = Blueprint("recommendations", __name__)
+
+@bp.route("/roi/insulation/attic", methods=["POST"])
+def roi_insulation_attic():
+    """Deterministic ROI calculator for attic insulation upgrades.
+
+    Body must match AtticInsulationROIInput; returns ROIResult JSON.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        inp = AtticInsulationROIInput(**data)
+    except Exception as e:
+        abort(400, description=f"Invalid input: {e}")
+
+    res = calculate_attic_insulation_roi(inp)
+    return jsonify(res.model_dump())
 
 @bp.route("/audits/<int:audit_id>/recommendations", methods=["GET"])
 def get_recommendations(audit_id):

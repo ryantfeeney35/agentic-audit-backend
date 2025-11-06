@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from .schemas import (
     AgentOutput,
     BootstrapOutput,
+    StepType,
     ExteriorSidingSchema,
     ExteriorMediaSchema,
     InteriorRoomSchema,
@@ -14,6 +15,7 @@ from .schemas import (
     InterviewSchema,
     RoofMediaSchema,
 )
+from .roi import enrich_recommendations_with_roi
 from models import AgentConversation, db
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
@@ -311,6 +313,24 @@ def run_agent(
     # -------------------------
     try:
         parsed = parser.parse(resp_text)
+        # Enrich recommendations with deterministic ROI for supported domains when applicable.
+        try:
+            # Only attempt enrichment for outputs that carry recommendations.
+            if isinstance(parsed, (AgentOutput, BootstrapOutput)):
+                # Map domain string to StepType where possible (only INSULATION currently supported)
+                try:
+                    step_domain = StepType[domain.upper()]
+                except Exception:
+                    step_domain = None
+
+                if step_domain is not None:
+                    ctx_obj = context if isinstance(context, dict) else {}
+                    enriched = enrich_recommendations_with_roi(step_domain, parsed.recommendations, ctx_obj)
+                    parsed.recommendations = enriched
+        except Exception:
+            # Do not let enrichment failures break the primary agent flow.
+            logger.debug("ROI enrichment skipped due to error", exc_info=True)
+
         return parsed.model_dump()
     except Exception as e:
         logger.error("❌ Parsing failed for %s agent: %s", domain, e, exc_info=True)
