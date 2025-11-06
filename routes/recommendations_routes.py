@@ -256,11 +256,10 @@ def patch_audit_roi_defaults(audit_id):
     if not isinstance(payload, dict):
         abort(400, description="Body must be a JSON object")
     try:
-        cur = audit.roi_defaults or {}
-        cur.update({
-            k: payload[k] for k in payload.keys()
-        })
-        audit.roi_defaults = cur
+        # Merge into a new dict so SQLAlchemy change tracking detects the update
+        base = dict(audit.roi_defaults or {})
+        merged = {**base, **{k: payload[k] for k in payload.keys()}}
+        audit.roi_defaults = merged
         db.session.commit()
     except Exception as e:
         db.session.rollback()
