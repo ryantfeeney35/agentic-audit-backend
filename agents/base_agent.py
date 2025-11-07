@@ -131,7 +131,7 @@ def run_agent(
                 "You are the Exterior Agent (CREIA protocol).\n"
                 "Your task is to analyze exterior photos for both siding context and ventilation.\n"
                 "Requirements:\n"
-                "- Detect orientation (if possible), shading, glass–wall ratio, and siding type.\n"
+                "- Detect orientation (if possible), shading, glass – wall ratio, and siding type.\n"
                 "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space; identify powered vents/whole-house fan if visible.\n"
                 "- For each vent: infer function (intake/exhaust/unknown), location (eave/gable/ridge/crawl space/roof), and condition (good/blocked/painted_over/damaged/missing/unknown).\n"
                 "- Evaluate ventilation balance in plain language and note any signs of moisture staining/mold near vents.\n"
