@@ -315,6 +315,7 @@ class OrchestratorAgent:
             try:
                 if (r.step_type or "").lower() == "insulation" and "attic" in (summary or "").lower():
                     roi_inputs: dict = {}
+
                     # Derive attic area from property sqft when available (35% heuristic)
                     if property_sqft is not None:
                         try:
@@ -322,12 +323,47 @@ class OrchestratorAgent:
                         except Exception:
                             pass
 
-                    # Target R: parse from summary like "R-38" or "R 38"
+                    # Prefer explicit fields from the agent output if present
+                    try:
+                        if rec.get("attic_current_r") is not None:
+                            roi_inputs["attic_current_r"] = float(rec.get("attic_current_r"))
+                    except Exception:
+                        pass
+                    try:
+                        if rec.get("attic_target_r") is not None:
+                            roi_inputs["attic_target_r"] = float(rec.get("attic_target_r"))
+                    except Exception:
+                        pass
+
+                    # Parse summary for ranges like "R-13 to R-38" or "R13–R38"
                     try:
                         import re
-                        m = re.search(r"\bR[-\s]?(\d+(?:\.\d+)?)\b", str(summary))
-                        if m:
-                            roi_inputs["attic_target_r"] = float(m.group(1))
+                        rng = re.search(r"\bR[-\s]?(\d+(?:\.\d+)?)\s*(?:to|–|—|-|>)\s*R[-\s]?(\d+(?:\.\d+)?)\b", str(summary), re.IGNORECASE)
+                        if rng:
+                            cur_v = float(rng.group(1))
+                            tgt_v = float(rng.group(2))
+                            if "attic_current_r" not in roi_inputs:
+                                roi_inputs["attic_current_r"] = cur_v
+                            if "attic_target_r" not in roi_inputs:
+                                roi_inputs["attic_target_r"] = tgt_v
+                    except Exception:
+                        pass
+
+                    # Parse explicit mentions like "current R-13" or "existing R-13"
+                    try:
+                        import re
+                        mcur = re.search(r"(?:current|existing)\s*R[-\s]?(\d+(?:\.\d+)?)", str(summary), re.IGNORECASE)
+                        if mcur and "attic_current_r" not in roi_inputs:
+                            roi_inputs["attic_current_r"] = float(mcur.group(1))
+                    except Exception:
+                        pass
+
+                    # If only a single R value is present and target not set, assume it refers to target
+                    try:
+                        import re
+                        msingle = re.search(r"\bR[-\s]?(\d+(?:\.\d+)?)\b", str(summary))
+                        if msingle and "attic_target_r" not in roi_inputs:
+                            roi_inputs["attic_target_r"] = float(msingle.group(1))
                     except Exception:
                         pass
 

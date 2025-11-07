@@ -316,7 +316,9 @@ def patch_recommendation_roi_inputs(audit_id, rec_id):
 
     # Optionally compute and persist ROI-derived numeric fields for attic insulation
     try:
-        if (rec.step_type or '').lower() == 'insulation' and ('attic' in (rec.summary or '').lower() or 'attic' in (rec.summary_override or '').lower() if rec.summary_override else False):
+        attic_keys_present = any(k in (rec.roi_inputs or {}) for k in ['attic_area_sqft', 'attic_current_r', 'attic_target_r', 'net_upgrade_cost_usd'])
+        text_mentions_attic = ('attic' in (rec.summary or '').lower()) or (('attic' in (rec.summary_override or '').lower()) if rec.summary_override else False)
+        if (rec.step_type or '').lower() == 'insulation' and (text_mentions_attic or attic_keys_present):
             audit = Audit.query.filter_by(id=audit_id).first()
             defaults = (audit.roi_defaults or {}) if audit else {}
             # Build input from roi_inputs + defaults
