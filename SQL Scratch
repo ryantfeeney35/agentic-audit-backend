@@ -26,23 +26,34 @@ delete from properties;
 delete from audits where property_id = 36
 delete from audit_steps;
 delete from audit_media where audit_media.media_type = 'document'
-delete from agent_conversations where id > 64
+delete from agent_conversations ;
 delete from audit_recommendations;
 delete from audit_steps WHERE id = 279
 
 
 ALTER TABLE audits ADD COLUMN IF NOT EXISTS audit_type TEXT;
 select * from properties;
-select * from audits WHERE property_id = 37;
-select * from audit_steps WHERE audit_id = 22;
-select * from audit_media WHERE audit_id = 38;
+select * from audits WHERE property_id = 24;
+select * from audit_steps WHERE audit_id = 39;
+select * from audit_media WHERE audit_id = 39;
+select * from audit_recommendations WHERE audit_id = 39;
 select id, file_name, summary, created_at 
 from audit_media 
 where audit_id=19 and step_type='exterior';
 select * from agent_conversations order by created_at;
 select distinct step_type from audit_steps where audit_id = 28;
 select id, step_id, summary from audit_media where audit_id = 28;
+
+alter table audit_recommendations add column if not exists contractor_id UUID;
+
+delete from agent_conversations where audit_id = 20;
+delete from audit_recommendations where audit_id = 20;
+delete from langchain_memory;
+
+select * from agent_conversations ;
+select * from audits;
 select * from audit_recommendations;
+select * from langchain_memory;
 
 INSERT INTO contractors (name, contact, step_type)
 VALUES 

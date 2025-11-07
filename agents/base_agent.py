@@ -121,15 +121,17 @@ def run_agent(
             system_instructions = (
                 "You are the Interior Agent (CREIA protocol).\n"
                 "- Identify room type, ceiling height, and ceiling material\n"
+                "- Detect whether the room has knee walls (short vertical walls beneath sloped ceilings). Set `knee_wall_present` true/false when visible; otherwise omit/null.\n"
+                "- Estimate `wall_to_glass_ratio` in the range [0,1] (window glass area divided by total wall area). If insufficient visual information, leave it null.\n"
                 "- Highlight comfort/efficiency impacts\n"
-                "- Return structured JSON using the InteriorMediaOutput schema."
+                "- Return structured JSON using the InteriorRoomSchema."
             )
         else:  # exterior
             system_instructions = (
                 "You are the Exterior Agent (CREIA protocol).\n"
                 "Your task is to analyze exterior photos for both siding context and ventilation.\n"
                 "Requirements:\n"
-                "- Detect orientation (if possible), shading, glass–wall ratio, and siding type.\n"
+                "- Detect orientation (if possible), shading, glass – wall ratio, and siding type.\n"
                 "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space; identify powered vents/whole-house fan if visible.\n"
                 "- For each vent: infer function (intake/exhaust/unknown), location (eave/gable/ridge/crawl space/roof), and condition (good/blocked/painted_over/damaged/missing/unknown).\n"
                 "- Evaluate ventilation balance in plain language and note any signs of moisture staining/mold near vents.\n"
