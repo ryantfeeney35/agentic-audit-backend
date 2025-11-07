@@ -26,10 +26,10 @@ CORS(app)
 # Register all blueprints
 register_blueprints(app)
 # 🔍 Debug: print all registered routes
-#print("✅ Registered routes:")
-#with app.app_context():
-#    for rule in app.url_map.iter_rules():
-#        print(f"{rule.endpoint:30s} -> {rule}")
+print("✅ Registered routes:")
+with app.app_context():
+    for rule in app.url_map.iter_rules():
+        print(f"{rule.endpoint:30s} -> {rule}")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))

@@ -104,6 +104,14 @@ class InteriorRoomSchema(BaseModel):
     room_type: str
     ceiling_height: str
     ceiling_material: str
+    knee_wall_present: Optional[bool] = Field(
+        default=None,
+        description="Whether the room has knee walls (short vertical walls at the base of sloped ceilings, common in finished attics).",
+    )
+    wall_to_glass_ratio: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0,
+        description="Estimated ratio of window glass area to total wall area (0..1).",
+    )
     ea_analysis: str
     summary: str
 

@@ -121,8 +121,10 @@ def run_agent(
             system_instructions = (
                 "You are the Interior Agent (CREIA protocol).\n"
                 "- Identify room type, ceiling height, and ceiling material\n"
+                "- Detect whether the room has knee walls (short vertical walls beneath sloped ceilings). Set `knee_wall_present` true/false when visible; otherwise omit/null.\n"
+                "- Estimate `wall_to_glass_ratio` in the range [0,1] (window glass area divided by total wall area). If insufficient visual information, leave it null.\n"
                 "- Highlight comfort/efficiency impacts\n"
-                "- Return structured JSON using the InteriorMediaOutput schema."
+                "- Return structured JSON using the InteriorRoomSchema."
             )
         else:  # exterior
             system_instructions = (

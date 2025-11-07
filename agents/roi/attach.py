@@ -45,7 +45,7 @@ def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recomm
             area_sqft = None
 
     # Determine R-values
-    current_r_value = context.get("attic_current_r", None)
+    current_r_value = context.get("attic_current_r", 13)
     target_r_value = context.get("attic_target_r", 38)
 
     # Determine billing rate and cost
