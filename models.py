@@ -7,10 +7,24 @@ from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
 db = SQLAlchemy()
 
 
+class User(db.Model):
+    __tablename__ = 'users'
+    
+    id = db.Column(db.String, primary_key=True)  # Supabase UUID as string
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    properties = relationship("Property", back_populates="user", cascade="all, delete-orphan")
+    audits = relationship("Audit", back_populates="user", cascade="all, delete-orphan")
+
+
 class Property(db.Model):
     __tablename__ = 'properties'
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     street = db.Column(db.String)
     city = db.Column(db.String)
     state = db.Column(db.String)
@@ -20,6 +34,7 @@ class Property(db.Model):
     property_type = db.Column(db.String, nullable=False)
 
     # Relationships
+    user = relationship("User", back_populates="properties")
     audits = relationship("Audit", back_populates="property", cascade="all, delete-orphan")
 
 
@@ -27,6 +42,7 @@ class Audit(db.Model):
     __tablename__ = 'audits'
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     property_id = db.Column(db.Integer, db.ForeignKey('properties.id', ondelete="CASCADE"), nullable=False)
     date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
     auditor_name = db.Column(db.String, nullable=True)
@@ -38,6 +54,7 @@ class Audit(db.Model):
     roi_defaults = db.Column(JSONB, default=dict)
 
     # Relationships
+    user = relationship("User", back_populates="audits")
     property = relationship("Property", back_populates="audits")
     steps = relationship("AuditStep", back_populates="audit", cascade="all, delete-orphan")
     media = relationship("AuditMedia", back_populates="audit", cascade="all, delete-orphan")
@@ -46,6 +63,7 @@ class AuditStep(db.Model):
     __tablename__ = "audit_steps"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String, nullable=False)
     label = db.Column(db.String, nullable=False)
@@ -68,6 +86,7 @@ class AuditMedia(db.Model):
     __tablename__ = "audit_media"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_id = db.Column(db.Integer, db.ForeignKey("audit_steps.id", ondelete="CASCADE"), nullable=False)
 
@@ -92,6 +111,7 @@ class AgentConversation(db.Model):
     __tablename__ = "agent_conversations"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     audit_id = db.Column(db.Integer, nullable=False)
     domain = db.Column(db.String, nullable=False)   # insulation, hvac, exterior, interview
     role = db.Column(db.String, nullable=False)     # system, user, assistant
@@ -103,6 +123,7 @@ class AuditRecommendation(db.Model):
     __tablename__ = "audit_recommendations"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
     audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     step_type = db.Column(db.String(50), nullable=False)
     summary = db.Column(db.Text, nullable=False)

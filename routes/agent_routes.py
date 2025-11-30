@@ -1,6 +1,7 @@
 # routes/agent_routes.py
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 from models import AgentConversation, Audit, AuditStep, db
+from auth import require_auth
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 import logging
@@ -18,7 +19,7 @@ bp = Blueprint("agent_review", __name__)
 # ----------------------------
 # Conversation helpers
 # ----------------------------
-def get_conversation_history(audit_id):
+def get_conversation_history(audit_id, user_id=None):
     """Retrieve all messages for an audit, ordered by creation time."""
     # Prefer memory-backed recent messages if enabled; format into role/domain content
     if memory_enabled():
@@ -39,16 +40,16 @@ def get_conversation_history(audit_id):
                 return out
         except Exception:
             pass
-    rows = (
-        AgentConversation.query
-        .filter_by(audit_id=audit_id)
-        .order_by(AgentConversation.created_at.asc())
-        .all()
-    )
+    
+    query = AgentConversation.query.filter_by(audit_id=audit_id)
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    
+    rows = query.order_by(AgentConversation.created_at.asc()).all()
     return [{"role": r.role, "content": r.content, "domain": r.domain} for r in rows]
 
 
-def save_message(audit_id, domain, role, content):
+def save_message(audit_id, domain, role, content, user_id=None):
     """Save a single conversation message."""
     # Attempt memory-backed persistence first
     if memory_enabled():
@@ -59,6 +60,7 @@ def save_message(audit_id, domain, role, content):
             pass
     msg = AgentConversation(
         audit_id=audit_id,
+        user_id=user_id,  # Add user_id
         domain=domain,
         role=role,
         content=content,
@@ -110,7 +112,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     logger.debug(f"🧠 [Orchestrator Context]\n{full_context[:1000]}")
 
     # --- Conversation history ---
-    history = get_conversation_history(audit_id)
+    history = get_conversation_history(audit_id, g.current_user['id'])
     filtered_history = [
         m for m in history if not (m["role"] == "assistant" and m["domain"] == "orchestrator")
     ]
@@ -144,6 +146,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 # Routes
 # ----------------------------
 @bp.route("/agent-review", methods=["POST"])
+@require_auth
 def agent_review():
     """Primary endpoint for ReviewPage orchestration."""
     data = request.json or {}
@@ -154,6 +157,11 @@ def agent_review():
 
     if not audit_id:
         return jsonify({"error": "auditId required"}), 400
+
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
 
     try:
         response = orchestration_agent(
@@ -170,15 +178,21 @@ def agent_review():
 
 
 @bp.route("/agent-conversations/merged", methods=["GET"])
+@require_auth
 def get_merged_conversation():
     """Return orchestrator + user conversation thread."""
     audit_id = request.args.get("audit_id")
     if not audit_id:
         return jsonify({"error": "audit_id required"}), 400
 
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
+
     rows = (
         AgentConversation.query
-        .filter_by(audit_id=audit_id)
+        .filter_by(audit_id=audit_id, user_id=g.current_user['id'])
         .order_by(AgentConversation.created_at.asc())
         .all()
     )
@@ -198,6 +212,7 @@ def get_merged_conversation():
 
 
 @bp.route("/agent-conversations", methods=["POST"])
+@require_auth
 def add_conversation_message():
     """Manually append a message to conversation (debug / interactive mode)."""
     data = request.get_json() or {}
@@ -209,8 +224,13 @@ def add_conversation_message():
     if not audit_id or not role or not content:
         return jsonify({"error": "audit_id, role, and content are required"}), 400
 
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
+
     try:
-        msg = save_message(audit_id, domain, role, content)
+        msg = save_message(audit_id, domain, role, content, g.current_user['id'])
         return jsonify({
             "id": msg.id,
             "audit_id": msg.audit_id,

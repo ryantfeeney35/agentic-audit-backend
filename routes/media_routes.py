@@ -5,14 +5,15 @@ import tempfile
 import subprocess
 import json
 from threading import Thread
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from werkzeug.utils import secure_filename
 from supabase import create_client
 from openai import OpenAI
 import traceback
 import requests
 
-from models import AuditMedia, AuditStep, db
+from models import AuditMedia, AuditStep, Audit, db
+from auth import require_auth
 from agents.base_agent import run_agent
 from agents.schemas import ExteriorSidingSchema, HVACSchema, InsulationSchema, InterviewSchema, InteriorRoomSchema, RoofMediaSchema
 
@@ -354,7 +355,13 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
 # Routes
 # -------------------------
 @bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
+@require_auth
 def upload_media_by_step_label(audit_id, step_label):
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({'error': 'Audit not found or access denied'}), 403
+        
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
 
@@ -366,7 +373,7 @@ def upload_media_by_step_label(audit_id, step_label):
     media_type = request.form.get('media_type', 'photo')
 
     # Find/create step
-    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label).first()
+    step = AuditStep.query.filter_by(audit_id=audit_id, label=step_label, user_id=g.current_user['id']).first()
     if not step:
         step = AuditStep(
             audit_id=audit_id,
