@@ -441,8 +441,9 @@ def upload_media_by_step_label(audit_id, step_label):
 
 
 @bp.route('/steps/<int:step_id>/media', methods=['GET'])
+@require_auth
 def get_step_media(step_id):
-    media = AuditMedia.query.filter_by(step_id=step_id).all()
+    media = AuditMedia.query.filter_by(step_id=step_id, user_id=g.current_user['id']).all()
     return jsonify([{
         "id": m.id,
         "audit_id": m.audit_id,
@@ -459,10 +460,11 @@ def get_step_media(step_id):
 
 
 @bp.route('/audits/<int:audit_id>/media', methods=['GET'])
+@require_auth
 def get_audit_media(audit_id):
     """Return all media for an audit. Optional query param 'media_type' to filter (photo, video, audio)."""
     media_type = request.args.get('media_type')
-    q = AuditMedia.query.filter_by(audit_id=audit_id)
+    q = AuditMedia.query.filter_by(audit_id=audit_id, user_id=g.current_user['id'])
     if media_type:
         q = q.filter(AuditMedia.media_type == media_type)
     media = q.order_by(AuditMedia.created_at.desc()).all()
@@ -480,10 +482,11 @@ def get_audit_media(audit_id):
     } for m in media])
 
 @bp.route('/media/<int:media_id>', methods=['DELETE'])
+@require_auth
 def delete_media(media_id):
-    media = AuditMedia.query.get(media_id)
+    media = AuditMedia.query.filter_by(id=media_id, user_id=g.current_user['id']).first()
     if not media:
-        return jsonify({"error": "Media not found"}), 404
+        return jsonify({"error": "Media not found or access denied"}), 404
 
     try:
         step = AuditStep.query.get(media.step_id)
@@ -515,6 +518,7 @@ def delete_media(media_id):
         return jsonify({"error": f"Failed to delete media: {e}"}), 500
     
 @bp.route('/steps/<int:step_id>/upload', methods=['POST'])
+@require_auth
 def upload_media_by_step_id(step_id):
     """Upload photo or audio directly to a specific step_id"""
     
@@ -526,9 +530,9 @@ def upload_media_by_step_id(step_id):
     media_type = request.form.get('media_type', 'photo')
     step_type = request.form.get('step_type', 'exterior')
 
-    step = AuditStep.query.get(step_id)
+    step = AuditStep.query.filter_by(id=step_id, user_id=g.current_user['id']).first()
     if not step:
-        return jsonify({'error': 'Step not found'}), 404
+        return jsonify({'error': 'Step not found or access denied'}), 404
 
     # 🔄 Mark the step as "Processing" immediately for all uploads
     step.status = "Processing"
@@ -561,6 +565,7 @@ def upload_media_by_step_id(step_id):
 
     # create AuditMedia record
     media = AuditMedia(
+        user_id=g.current_user['id'],
         audit_id=step.audit_id,
         step_id=step.id,
         media_url=public_url,
