@@ -16,7 +16,7 @@ from .schemas import (
     RoofMediaSchema,
 )
 from .roi import enrich_recommendations_with_roi
-from models import AgentConversation, db, Audit
+from models import AgentConversation, db
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 
@@ -60,6 +60,16 @@ def run_agent(
 ) -> dict:
     """Run a domain agent against the provided context.
 
+    STRICT EVIDENCE MODE (Option A):
+    - The app NEVER has access to the human auditor's EA report.
+    - The model may ONLY use information present in:
+        * Photos / image batches
+        * Audio transcripts
+        * Structured context objects provided by the app
+        * Prior agent outputs included in `context`
+    - The model MUST NOT invent generic best-practice recommendations that are
+      not directly justified by explicit evidence in the provided context.
+
     Special handling: when invoked in recommendations mode for the orchestrator's
     audio-only pass, we may receive a dict like {"type": "audio_pass", "text": "..."}.
     If the audio text is empty, short-circuit and return an empty recommendations list
@@ -88,107 +98,273 @@ def run_agent(
     # System instructions
     # -------------------------
     if mode == "media":
+        # MEDIA MODE = DESCRIPTIVE + EVIDENCE-ONLY FLAGS.
+        # No generalized upgrade ideas; only describe what is clearly visible.
         if domain == "insulation":
             system_instructions = (
-                "You are the Insulation Agent (CREIA protocol).\n"
-                "- Identify insulation type, depth, and condition\n"
-                "- Flag gaps/thermal breaks, attic cover, recessed lights\n"
-                "- Return structured JSON using the InsulationMediaOutput schema."
+                "You are the Insulation Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the photos or media provided and any structured metadata in the input.\n"
+                "- You DO NOT have the auditor's written report.\n"
+                "- You MUST NOT make building-wide assumptions (home age, climate zone, code compliance)\n"
+                "  unless explicitly stated in the provided context.\n"
+                "- If something is not clearly visible or not clearly stated, you MUST mark it as unknown/null\n"
+                "  rather than guessing.\n"
+                "\n"
+                "Task:\n"
+                "- Identify insulation type(s) that are clearly visible (e.g., fiberglass batts, blown-in, foam) or null if unclear.\n"
+                "- Estimate depth/coverage ONLY when it is clearly estimable from the images or explicit text.\n"
+                "- Flag visible gaps, thermal breaks, missing insulation, uninsulated hatches, or recessed lights only when\n"
+                "  they are actually visible.\n"
+                "- Highlight any obvious moisture/damage issues that are clearly seen.\n"
+                "- If the schema includes a recommendation or notes field, ONLY include a recommendation when the\n"
+                "  media show a concrete deficiency (e.g., obvious bare areas, compressed batts, missing hatch insulation).\n"
+                "  If you do not see a specific problem, leave recommendation fields blank or neutral.\n"
+                "- Do NOT propose generic upgrades such as 'add more insulation to meet code' unless the provided\n"
+                "  context explicitly states the current R-value and that it is below target.\n"
+                "- Do NOT invent any cost, savings, or payback numbers. These will be handled by a downstream ROI system.\n"
+                "\n"
+                "Output:\n"
+                "- Return structured JSON using the InsulationMediaOutput / InsulationSchema.\n"
+                "- Use explicit 'unknown' or null for any fields you cannot substantiate from evidence."
             )
         elif domain == "hvac":
             system_instructions = (
-                "You are the HVAC Agent (CREIA protocol).\n"
-                "- Identify system type, brand/model, efficiency ratings\n"
-                "- Assess ducting (sealing, insulation, asbestos tape)\n"
-                "- Flag safety/efficiency issues\n"
-                "- Return structured JSON using the HVACMediaOutput schema."
+                "You are the HVAC Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the photos or media provided and any structured metadata in the input.\n"
+                "- You DO NOT have the auditor's written report.\n"
+                "- Do NOT assume equipment age, efficiency, or condition beyond labels clearly visible in the images\n"
+                "  or explicit text in the context.\n"
+                "- Do NOT recommend generic upgrades like 'replace with a heat pump' or 'install a smart thermostat'\n"
+                "  unless the context explicitly describes a deficiency (e.g., existing thermostat is non-programmable\n"
+                "  and called out as a problem).\n"
+                "\n"
+                "Task:\n"
+                "- Identify system type(s) (e.g., gas furnace, condenser, heat pump) based only on visible data plates\n"
+                "  or obvious physical characteristics.\n"
+                "- Extract brand, model, and labeled efficiency ratings when clearly visible.\n"
+                "- Assess ducting ONLY based on what is visible: presence of duct tape, suspected asbestos wrap,\n"
+                "  visible kinks, disconnections, or lack of insulation. If not clearly visible, mark as unknown.\n"
+                "- Flag obvious safety/efficiency issues that are clearly supported by the photos (e.g., deteriorated\n"
+                "  duct tape, disconnected ducts, severe rust, missing covers).\n"
+                "- If your schema includes a recommendation field, ONLY recommend actions that directly address\n"
+                "  clearly visible issues. If nothing clearly warrants action, leave recommendations empty.\n"
+                "- Do NOT invent cost, savings, or payback numbers.\n"
+                "\n"
+                "Output:\n"
+                "- Return structured JSON using the HVACMediaOutput / HVACSchema.\n"
+                "- Prefer 'unknown' or null instead of guessing."
             )
         elif domain == "roof":
             system_instructions = (
-                "You are the Roof Agent (CREIA protocol).\n"
-                "Your task is to analyze roof photos/videos for finish, color, ventilation elements, shading, and condition issues.\n"
-                "Requirements:\n"
-                "- Identify roof finish type (e.g., composition shingle, tile, metal, rolled).\n"
-                "- Identify roof color (light/medium/dark or a short descriptive color).\n"
-                "- Detect visible roof ventilation elements: ridge vent, gable vent, turbine/powered fans, soffit intake at eaves; classify using ExteriorVent with type/function/location/condition/is_obstructed/confidence.\n"
-                "- Describe shading context (none/partial/heavy and brief source if visible such as trees/adjacent buildings).\n"
-                "- List condition issues (e.g., missing shingles, lifted edges, debris, broken tiles, ponding).\n"
-                "- Provide a concise CREIA-aligned summary and a roof-specific recommendation.\n"
-                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "You are the Roof Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the roof photos/media and any explicit text metadata. You do NOT see the full audit report.\n"
+                "- Do NOT assume roof age, underlayment type, or structural issues unless clearly indicated.\n"
+                "- If the media are limited or blurry, you MUST lower your confidence and lean on follow-up questions\n"
+                "  instead of speculative recommendations.\n"
+                "\n"
+                "Task:\n"
+                "- Identify roof finish type (e.g., composition shingle, tile, metal, rolled) ONLY if clearly visible.\n"
+                "- Identify roof color as light/medium/dark or a short descriptive color when clear.\n"
+                "- Detect visible roof ventilation elements (ridge vent, gable vent, turbine/powered fans, soffit intake at eaves)\n"
+                "  only when they are obviously present in the images. Otherwise do not invent them.\n"
+                "- For each vent, set type/function/location/condition/is_obstructed/confidence, using 'unknown' or null\n"
+                "  when you cannot clearly see the detail.\n"
+                "- Describe shading context (none/partial/heavy) only if trees/buildings or other shading elements are visible.\n"
+                "- List condition issues that are visually obvious (missing shingles, broken tiles, ponding, debris). Do NOT\n"
+                "  speculate about leaks or lifespan.\n"
+                "- Provide a concise CREIA-aligned summary of what is actually observed.\n"
+                "- If your schema requires a recommendation field:\n"
+                "  * ONLY recommend actions that directly address specific, visible issues (e.g., 'clear debris at valley').\n"
+                "  * If there is insufficient evidence for any upgrade, leave the recommendation text empty or neutral.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6;\n"
+                "  otherwise, followup_questions must be empty.\n"
+                "- NEVER propose generic upgrades like 'replace roof', 'add more vents', or 'install solar' unless the\n"
+                "  visible evidence clearly supports that conclusion.\n"
+                "- Do NOT invent cost/savings/payback numbers.\n"
+                "\n"
+                "Output:\n"
                 "- Return structured JSON using the RoofMediaSchema."
             )
         elif domain == "interior":
             system_instructions = (
-                "You are the Interior Agent (CREIA protocol).\n"
-                "- Identify room type, ceiling height, and ceiling material\n"
-                "- Detect whether the room has knee walls (short vertical walls beneath sloped ceilings). Set `knee_wall_present` true/false when visible; otherwise omit/null.\n"
-                "- Estimate `wall_to_glass_ratio` in the range [0,1] (window glass area divided by total wall area). If insufficient visual information, leave it null.\n"
-                "- Highlight comfort/efficiency impacts\n"
-                "- Return structured JSON using the InteriorRoomSchema."
+                "You are the Interior Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the provided interior photos/media and any structured metadata.\n"
+                "- You MUST NOT recommend generic lifestyle or housekeeping changes (e.g., decluttering, closet\n"
+                "  organization) unless the schema explicitly requires them and they are clearly motivated by images.\n"
+                "- You do NOT have access to the auditor's written report.\n"
+                "\n"
+                "Task:\n"
+                "- Identify room type IF it is clear (e.g., bedroom, living room, attic room). If not clear, mark as unknown.\n"
+                "- Identify ceiling height/ceiling material when reasonably inferable; otherwise leave as unknown.\n"
+                "- Detect whether the room has knee walls only when obviously visible.\n"
+                "- Estimate wall_to_glass_ratio in [0,1] only when window and wall areas are visually clear; otherwise null.\n"
+                "- Highlight comfort/efficiency impacts based ONLY on what is visible (e.g., large unshaded window, no\n"
+                "  window coverings, visible supply registers, etc.).\n"
+                "- If your schema includes recommendations, ONLY recommend measures that directly address\n"
+                "  visible envelope or comfort issues (e.g., consider insulating window coverings where large glass is visible).\n"
+                "- Do NOT recommend general LED upgrades, smart thermostats, or organization/decluttering unless\n"
+                "  the context explicitly demands that and you can tie it to energy/comfort.\n"
+                "- Do NOT create numeric savings or payback.\n"
+                "\n"
+                "Output:\n"
+                "- Return structured JSON using the InteriorRoomSchema.\n"
+                "- Use null/unknown when evidence is insufficient."
             )
         else:  # exterior
             system_instructions = (
-                "You are the Exterior Agent (CREIA protocol).\n"
-                "Your task is to analyze exterior photos for both siding context and ventilation.\n"
-                "Requirements:\n"
-                "- Detect orientation (if possible), shading, glass – wall ratio, and siding type.\n"
-                "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space; identify powered vents/whole-house fan if visible.\n"
-                "- For each vent: infer function (intake/exhaust/unknown), location (eave/gable/ridge/crawl space/roof), and condition (good/blocked/painted_over/damaged/missing/unknown).\n"
-                "- Evaluate ventilation balance in plain language and note any signs of moisture staining/mold near vents.\n"
-                "- Provide a CREIA-aligned recommendation with a short rationale.\n"
-                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6; otherwise, followup_questions must be empty.\n"
+                "You are the Exterior Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see exterior photos/media and explicit metadata in the input.\n"
+                "- You DO NOT have the full written audit report.\n"
+                "- You MUST NOT make generic best-practice recommendations (e.g., trim vegetation, repaint siding,\n"
+                "  upgrade wall insulation) unless the photos clearly show a condition that requires that action.\n"
+                "\n"
+                "Task:\n"
+                "- Detect orientation if explicitly labeled in the context; otherwise you may describe relative orientation\n"
+                "  (e.g., 'this appears to be a sun-exposed wall') but avoid guessing compass directions.\n"
+                "- Describe shading, glass–wall ratio, and siding type based solely on visual evidence.\n"
+                "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space, powered vents.\n"
+                "- For each vent, infer function (intake/exhaust/unknown), location, and condition based only on what\n"
+                "  you can actually see. Use 'unknown' when in doubt.\n"
+                "- Note any signs of moisture staining or mold near vents ONLY if clearly visible.\n"
+                "- Provide a concise CREIA-aligned summary of the observed exterior conditions.\n"
+                "- If your schema has a recommendation field, ONLY recommend actions that directly address\n"
+                "  specific observed issues (e.g., 'repair damaged stucco at visible crack'). Do NOT recommend\n"
+                "  repainting, insulation upgrades, or vegetation trimming without an obvious visual trigger.\n"
+                "- Do NOT invent numeric costs, savings, or payback.\n"
+                "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6;\n"
+                "  otherwise, followup_questions must be empty.\n"
+                "\n"
+                "Output:\n"
                 "- Return structured JSON using the ExteriorMediaSchema."
             )
     elif mode == "bootstrap":
         system_instructions = f"""
-            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol. Focus ONLY on {domain}.
-            - Always return JSON conforming to AgentOutput.
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol
+            in STRICT EVIDENCE MODE.
+
+            STRICT EVIDENCE MODE RULES:
+            - You ONLY use facts present in the provided context (photos/structured data/transcripts).
+            - You DO NOT have the human auditor's written report.
+            - You MUST NOT invent problems or upgrades. If something is not stated or clearly implied,
+              treat it as unknown.
+            - You MUST NOT invent numeric costs, annual savings, or payback; a separate ROI system
+              will handle that later.
+
+            Task in bootstrap mode:
+            - Always return JSON conforming to BootstrapOutput.
             - Fill BOTH `summary` and `followup_questions`.
 
-            Start by producing a concise `summary` of the current {domain} findings
-            based on the provided context, then identify up to 10 precise follow-up questions
-            needed to complete the data required for recommendations.
+            Summary:
+            - Provide a concise, factual summary of what is already known about this home's {domain}
+              systems from the context. If very little is known, say so explicitly.
 
-            Guidelines:
-            - Review the provided context carefully and identify factual gaps.
-            - Ask at most 10 questions that would help complete your understanding.
-            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            Follow-up questions:
+            - Identify up to 10 precise follow-up questions that, if answered, would provide the EVIDENCE
+              you need to later generate specific, technically valid upgrade recommendations.
+            - Each question should be anchored to a potential decision (e.g., verifying duct leakage,
+              confirming insulation depth, confirming presence/absence of ventilation).
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions,
+              access, usage patterns).
             - Avoid repeating information already covered in the context.
-            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
-            - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            - Do NOT ask whether the user wants recommendations — recommendations always come later.
+            - Phrase questions the way a field auditor would ask a homeowner or themselves on-site.
+
+            Output:
+            - Return JSON conforming to BootstrapOutput.
+            - `followup_questions` should reflect specific missing evidence, not generic curiosities.
             """
     elif mode == "recommendations":
         # If this is the orchestrator's audio-only pass, constrain behavior tightly
         is_audio_only = isinstance(context, dict) and context.get("type") == "audio_pass"
         extra = (
-            "\n- You are running in audio-only mode. Use ONLY the provided transcript text. "
-            "If the transcript lacks actionable details, return an empty `recommendations` list."
+            "\n- You are running in audio-only mode. Use ONLY the provided transcript text.\n"
+            "  If the transcript lacks concrete, actionable details about {domain}-related conditions\n"
+            "  (e.g., only says 'bills are high' or 'home is drafty' without specifics), you MUST return an\n"
+            "  empty `recommendations` list. Do NOT invent best-practice upgrades in that case."
             if is_audio_only
             else ""
         )
         system_instructions = (
-            f"You are the {domain.capitalize()} Agent. Focus ONLY on {domain}.\n"
+            f"You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol\n"
+            "in STRICT EVIDENCE MODE (Option A).\n"
+            "\n"
+            "STRICT EVIDENCE MODE RULES:\n"
+            "- You ONLY use facts present in the provided context (photos-derived summaries, structured fields,\n"
+            "  auditor audio transcript, and any previous domain-specific findings included in the input).\n"
+            "- You DO NOT have access to the human auditor's final written report.\n"
+            "- For every recommendation you output, there MUST be at least one explicit, concrete piece of evidence\n"
+            "  in the context that justifies it (e.g., 'unducted return causing leakage', 'fireplace damper permanently open',\n"
+            "  'visible deteriorated duct tape').\n"
+            "- You MUST NOT output generic best-practice recommendations that are not clearly grounded in the\n"
+            "  provided evidence. Examples of DISALLOWED generic recommendations unless explicitly supported:\n"
+            "    * Trim vegetation or move stored items away from walls\n"
+            "    * Repaint or reseal siding purely as maintenance\n"
+            "    * Add or upgrade wall insulation with no measured R-values or observed deficiencies\n"
+            "    * Install smart thermostats as a generic upgrade\n"
+            "    * Upgrade furnace/HVAC purely based on age guesses\n"
+            "    * General LED lighting upgrades without evidence of inefficient lighting\n"
+            "    * Decluttering rooms, organizing closets, or similar housekeeping advice\n"
+            "    * Any measure that depends on climate zone, code minimums, or full-building modeling unless that\n"
+            "      information is explicitly present in the context.\n"
+            "- If you cannot point to a specific observed deficiency in the provided context, you MUST NOT recommend\n"
+            "  an upgrade to address it.\n"
+            "- If the context is high-level, vague, or obviously incomplete, it is BETTER to return an empty\n"
+            "  `recommendations` list than to guess.\n"
+            "- Do NOT invent numeric cost, annual savings, or payback values. If your schema includes numeric\n"
+            "  ROI-related fields, set them to null/0/omitted so that a downstream deterministic ROI system can\n"
+            "  populate them.\n"
+            "\n"
+            "Task in recommendations mode:\n"
             "- Always return JSON conforming to AgentOutput.\n"
-            f"- Recommendation type should be appropriate for the domain ({domain})\n"
-            "- Populate ONLY `recommendations`."
-            + extra
+            "- Populate ONLY `recommendations`. Leave `summary` as an empty string and\n"
+            "  `followup_questions` as an empty list.\n"
+            "- Each recommendation must:\n"
+            "    * Be specific and actionable.\n"
+            "    * Be clearly tied to evidence in the context (even if you do not explicitly list that evidence).\n"
+            "    * Be appropriate for the domain ({domain}).\n"
+            "- If there is insufficient evidence for any recommendation, return an EMPTY `recommendations` list.\n"
+            f"{extra}"
         )
     else:  # followup
         system_instructions = f"""
-            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol.
+            You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol
+            in STRICT EVIDENCE MODE.
 
-            Your task is to generate follow-up questions that will fill in missing information
-            required to produce precise and technically valid upgrade recommendations
-            for this home's {domain} systems.
+            Your task is to generate follow-up questions that will fill in the missing EVIDENCE required
+            to later produce precise and technically valid upgrade recommendations for this home's {domain}
+            systems.
+
+            STRICT EVIDENCE MODE RULES:
+            - You ONLY use facts already present in the provided context.
+            - You DO NOT have the final auditor report.
+            - You MUST NOT assume problems that are not hinted at by the context.
+            - Your follow-up questions should be the minimum necessary to confirm or rule out potential
+              issues that CREIA-style recommendations depend on.
 
             Guidelines:
-            - Review the provided context carefully and identify factual gaps.
-            - Ask at most 10 questions that would help complete your understanding.
-            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions, access, usage patterns).
+            - Review the context carefully and identify factual gaps blocking evidence-based recommendations.
+            - Ask at most 10 questions, each clearly motivated by a potential decision (e.g., 'Does the duct
+              system have an unducted return?', 'Is there visible attic ventilation in the main attic?').
+            - Focus on measurable, observable, or verifiable details (materials, dimensions, conditions,
+              access, usage patterns).
             - Avoid repeating information already covered in the context.
-            - Do NOT ask if the user wants recommendations — recommendations are always the next step.
+            - Do NOT ask whether the user wants recommendations — recommendations always come later.
             - Phrase questions naturally for a field auditor to ask a homeowner or themselves during inspection.
+            - DO NOT ask for generic preferences (e.g., budget, aesthetics) unless the context suggests it is
+              necessary to choose between two evidence-supported options.
             - Return JSON conforming to AgentOutput, with all questions listed under `followup_questions`.
+            - In followup mode you typically leave `summary` brief or empty and do NOT populate
+              `recommendations`.
             """
 
     system_message = system_instructions + "\n\n" + parser.get_format_instructions()
@@ -257,52 +433,21 @@ def run_agent(
     # Persist conversation (only for interactive modes)
     # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        # Resolve user ownership for NOT NULL user_id constraint
-        audit_user_id = None
-        try:
-            audit_row = Audit.query.get(audit_id)
-            if audit_row and getattr(audit_row, "user_id", None):
-                audit_user_id = audit_row.user_id
-        except Exception:
-            audit_user_id = None
-
-        if audit_user_id is None:
-            logger.error(
-                "run_agent: Missing user_id for audit_id=%s; skipping DB conversation persistence to avoid integrity error.",
-                audit_id,
-            )
-            # Attempt memory-only persistence for visibility
-            if memory_enabled():
-                try:
-                    chatmem.save_message(audit_id, domain, "system", system_message)
-                    chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
-                    chatmem.save_message(audit_id, domain, "assistant", resp_text)
-                except Exception:
-                    pass
-        else:
-            if memory_enabled():
-                try:
-                    chatmem.save_message(audit_id, domain, "system", system_message)
-                    chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
-                    chatmem.save_message(audit_id, domain, "assistant", resp_text)
-                except Exception:
-                    # Fallback to DB persistence below
-                    pass
-            # Persist to DB (either primary path or fallback after memory failure)
+        if memory_enabled():
             try:
+                chatmem.save_message(audit_id, domain, "system", system_message)
+                chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
+                chatmem.save_message(audit_id, domain, "assistant", resp_text)
+            except Exception:
+                # Fallback to legacy DB writes on failure
                 db.session.add(
                     AgentConversation(
-                        audit_id=audit_id,
-                        user_id=audit_user_id,
-                        domain=domain,
-                        role="system",
-                        content=system_message,
+                        audit_id=audit_id, domain=domain, role="system", content=system_message
                     )
                 )
                 db.session.add(
                     AgentConversation(
                         audit_id=audit_id,
-                        user_id=audit_user_id,
                         domain=domain,
                         role="user",
                         content=str(context)[:2000],
@@ -311,18 +456,35 @@ def run_agent(
                 db.session.add(
                     AgentConversation(
                         audit_id=audit_id,
-                        user_id=audit_user_id,
                         domain=domain,
                         role="assistant",
                         content=resp_text,
                     )
                 )
                 db.session.commit()
-            except Exception:
-                db.session.rollback()
-                logger.exception(
-                    "run_agent: Failed to persist conversation messages for audit_id=%s domain=%s", audit_id, domain
+        else:
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id, domain=domain, role="system", content=system_message
                 )
+            )
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="user",
+                    content=str(context)[:2000],
+                )
+            )
+            db.session.add(
+                AgentConversation(
+                    audit_id=audit_id,
+                    domain=domain,
+                    role="assistant",
+                    content=resp_text,
+                )
+            )
+            db.session.commit()
 
     # -------------------------
     # Parse response
