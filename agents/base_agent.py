@@ -16,7 +16,7 @@ from .schemas import (
     RoofMediaSchema,
 )
 from .roi import enrich_recommendations_with_roi
-from models import AgentConversation, db
+from models import AgentConversation, db, Audit
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 
@@ -257,21 +257,52 @@ def run_agent(
     # Persist conversation (only for interactive modes)
     # -------------------------
     if audit_id and mode in ["bootstrap", "followup"]:
-        if memory_enabled():
+        # Resolve user ownership for NOT NULL user_id constraint
+        audit_user_id = None
+        try:
+            audit_row = Audit.query.get(audit_id)
+            if audit_row and getattr(audit_row, "user_id", None):
+                audit_user_id = audit_row.user_id
+        except Exception:
+            audit_user_id = None
+
+        if audit_user_id is None:
+            logger.error(
+                "run_agent: Missing user_id for audit_id=%s; skipping DB conversation persistence to avoid integrity error.",
+                audit_id,
+            )
+            # Attempt memory-only persistence for visibility
+            if memory_enabled():
+                try:
+                    chatmem.save_message(audit_id, domain, "system", system_message)
+                    chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
+                    chatmem.save_message(audit_id, domain, "assistant", resp_text)
+                except Exception:
+                    pass
+        else:
+            if memory_enabled():
+                try:
+                    chatmem.save_message(audit_id, domain, "system", system_message)
+                    chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
+                    chatmem.save_message(audit_id, domain, "assistant", resp_text)
+                except Exception:
+                    # Fallback to DB persistence below
+                    pass
+            # Persist to DB (either primary path or fallback after memory failure)
             try:
-                chatmem.save_message(audit_id, domain, "system", system_message)
-                chatmem.save_message(audit_id, domain, "user", str(context)[:2000])
-                chatmem.save_message(audit_id, domain, "assistant", resp_text)
-            except Exception:
-                # Fallback to legacy DB writes on failure
                 db.session.add(
                     AgentConversation(
-                        audit_id=audit_id, domain=domain, role="system", content=system_message
+                        audit_id=audit_id,
+                        user_id=audit_user_id,
+                        domain=domain,
+                        role="system",
+                        content=system_message,
                     )
                 )
                 db.session.add(
                     AgentConversation(
                         audit_id=audit_id,
+                        user_id=audit_user_id,
                         domain=domain,
                         role="user",
                         content=str(context)[:2000],
@@ -280,35 +311,18 @@ def run_agent(
                 db.session.add(
                     AgentConversation(
                         audit_id=audit_id,
+                        user_id=audit_user_id,
                         domain=domain,
                         role="assistant",
                         content=resp_text,
                     )
                 )
                 db.session.commit()
-        else:
-            db.session.add(
-                AgentConversation(
-                    audit_id=audit_id, domain=domain, role="system", content=system_message
+            except Exception:
+                db.session.rollback()
+                logger.exception(
+                    "run_agent: Failed to persist conversation messages for audit_id=%s domain=%s", audit_id, domain
                 )
-            )
-            db.session.add(
-                AgentConversation(
-                    audit_id=audit_id,
-                    domain=domain,
-                    role="user",
-                    content=str(context)[:2000],
-                )
-            )
-            db.session.add(
-                AgentConversation(
-                    audit_id=audit_id,
-                    domain=domain,
-                    role="assistant",
-                    content=resp_text,
-                )
-            )
-            db.session.commit()
 
     # -------------------------
     # Parse response
