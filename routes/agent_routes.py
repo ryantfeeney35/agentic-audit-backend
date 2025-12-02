@@ -129,7 +129,8 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 
     # --- Save new user answer if provided ---
     if from_user and user_answer and user_answer.strip():
-        save_message(audit_id, "orchestrator", "user", user_answer.strip())
+        # Persist with authenticated user ownership to satisfy NOT NULL user_id
+        save_message(audit_id, "orchestrator", "user", user_answer.strip(), g.current_user['id'])
 
     # --- Run all relevant agents ---
     agent_replies = []
@@ -147,7 +148,8 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
     final_reply = merge_agent_outputs(agent_replies, bootstrap=bootstrap)
 
     # --- Save orchestrator reply ---
-    save_message(audit_id, "orchestrator", "assistant", final_reply)
+    # Persist orchestrator assistant reply under the current user's ownership
+    save_message(audit_id, "orchestrator", "assistant", final_reply, g.current_user['id'])
     logger.debug("✅ Final Orchestrator Reply Saved")
 
     return final_reply
