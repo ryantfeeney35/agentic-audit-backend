@@ -21,6 +21,11 @@ bp = Blueprint("agent_review", __name__)
 # ----------------------------
 def get_conversation_history(audit_id, user_id=None):
     """Retrieve all messages for an audit, ordered by creation time."""
+    # Ensure any previously failed transaction doesn't poison subsequent reads
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
     # Prefer memory-backed recent messages if enabled; format into role/domain content
     if memory_enabled():
         try:
@@ -65,8 +70,13 @@ def save_message(audit_id, domain, role, content, user_id=None):
         role=role,
         content=content,
     )
-    db.session.add(msg)
-    db.session.commit()
+    try:
+        db.session.add(msg)
+        db.session.commit()
+    except Exception:
+        # Clear failed transaction state to avoid cascading failures
+        db.session.rollback()
+        raise
     return msg
 
 # ----------------------------
@@ -159,6 +169,11 @@ def agent_review():
         return jsonify({"error": "auditId required"}), 400
 
     # Check audit ownership
+    # Clear any failed transaction state before querying
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
     audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
     if not audit:
         return jsonify({"error": "Audit not found or access denied"}), 403
@@ -174,6 +189,11 @@ def agent_review():
         return jsonify({"response": response})
     except Exception as e:
         logger.exception("❌ Orchestrator failed")
+        # rollback to reset failed transaction state
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
 
 
@@ -186,16 +206,29 @@ def get_merged_conversation():
         return jsonify({"error": "audit_id required"}), 400
 
     # Check audit ownership
+    # Clear failed transaction state before querying
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
     audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
     if not audit:
         return jsonify({"error": "Audit not found or access denied"}), 403
 
-    rows = (
-        AgentConversation.query
-        .filter_by(audit_id=audit_id, user_id=g.current_user['id'])
-        .order_by(AgentConversation.created_at.asc())
-        .all()
-    )
+    try:
+        rows = (
+            AgentConversation.query
+            .filter_by(audit_id=audit_id, user_id=g.current_user['id'])
+            .order_by(AgentConversation.created_at.asc())
+            .all()
+        )
+    except Exception as e:
+        logger.exception("❌ Failed to fetch merged conversation")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return jsonify({"error": str(e)}), 500
 
     merged = [
         {
