@@ -300,7 +300,20 @@ class OrchestratorAgent:
                 return None
 
         # Clear old recs
-        AuditRecommendation.query.filter_by(audit_id=self.audit_id).delete()
+        # If a previous DB operation in this request failed, the transaction may be in an
+        # aborted state, causing "current transaction is aborted" on subsequent queries.
+        # Roll back proactively, then perform the delete in its own try/except and commit.
+        try:
+            db.session.rollback()
+        except Exception:
+            # Non-fatal; proceed with delete attempt
+            pass
+        try:
+            AuditRecommendation.query.filter_by(audit_id=self.audit_id).delete()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Failed to clear existing recommendations for audit_id=%s", self.audit_id)
 
         saved = []
         for rec in all_recs:
