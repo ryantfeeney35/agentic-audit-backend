@@ -131,7 +131,12 @@ def get_audit_by_property(property_id):
         return jsonify({"error": "No audit found"}), 404
 
 @bp.route('/audits/<int:audit_id>/utility-bill', methods=['POST'])
+@require_auth
 def handle_utility_bill(audit_id):
+    # Ensure the audit belongs to the current user
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
     file = request.files.get('file')
     if not file:
         return jsonify({'error': 'Missing utility bill file'}), 400
@@ -165,6 +170,7 @@ def handle_utility_bill(audit_id):
 
     # Step 3: Save AuditStep
     step = AuditStep(
+        user_id=g.current_user['id'],
         audit_id=audit_id,
         step_type='interview',
         label='Utility Bill',
@@ -176,6 +182,7 @@ def handle_utility_bill(audit_id):
 
     # Step 4: Save AuditMedia
     media = AuditMedia(
+        user_id=g.current_user['id'],
         audit_id=audit_id,
         step_id=step.id,
         file_name=secure_filename(file.filename),
