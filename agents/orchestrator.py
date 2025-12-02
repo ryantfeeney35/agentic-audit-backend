@@ -80,6 +80,13 @@ class OrchestratorAgent:
 
     def _get_history(self) -> str:
         """Return formatted conversation history excluding orchestrator summaries."""
+        # If any earlier DB operation in this request failed, the SQLAlchemy session may be
+        # in an aborted state, which would cause "current transaction is aborted" on the query below.
+        # Proactively roll back to ensure the history query can proceed cleanly.
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         # Prefer memory-backed recent messages if enabled
         if memory_enabled():
             try:
