@@ -1,3 +1,4 @@
+from .auth_routes import bp as auth_bp
 from .agent_routes import bp as agent_bp
 from .property_routes import bp as property_bp
 from .audit_routes import bp as audit_bp
@@ -8,6 +9,7 @@ from .contractor_routes import bp as contractor_bp
 from .report_routes import bp as report_bp
 
 def register_blueprints(app):
+    app.register_blueprint(auth_bp, url_prefix="/api")
     app.register_blueprint(agent_bp, url_prefix="/api")
     app.register_blueprint(property_bp, url_prefix="/api")
     app.register_blueprint(audit_bp, url_prefix="/api")

@@ -32,24 +32,61 @@ class OrchestratorAgent:
     # --- Conversation utilities ---
     def _save_message(self, role: str, domain: str, content: str):
         logger.debug("💾 Saving message: role=%s, domain=%s, content=%s", role, domain, content[:300])
+        # Retrieve audit to obtain user ownership for NOT NULL user_id constraint
+        user_id = None
+        try:
+            audit_row = Audit.query.get(self.audit_id)
+            if audit_row and getattr(audit_row, 'user_id', None):
+                user_id = audit_row.user_id
+        except Exception:
+            user_id = None
+
+        if user_id is None:
+            logger.error(
+                "_save_message: Missing user_id when persisting conversation (audit_id=%s). Skipping DB write to avoid integrity error.",
+                self.audit_id,
+            )
+            # Still attempt in-memory persistence for visibility even if DB skipped
+            if memory_enabled():
+                try:
+                    chatmem.save_message(self.audit_id, domain, role, content)
+                except Exception:
+                    pass
+            return None
+
+        # Memory-backed persistence first (best-effort)
         if memory_enabled():
             try:
                 chatmem.save_message(self.audit_id, domain, role, content)
-                return None
             except Exception:
+                # Non-fatal; fall back to DB below
                 pass
+
         msg = AgentConversation(
             audit_id=self.audit_id,
+            user_id=user_id,
             role=role,
             domain=domain,
             content=content,
         )
-        db.session.add(msg)
-        db.session.commit()
-        return msg
+        try:
+            db.session.add(msg)
+            db.session.commit()
+            return msg
+        except Exception:
+            db.session.rollback()
+            logger.exception("_save_message: DB commit failed for audit_id=%s", self.audit_id)
+            return None
 
     def _get_history(self) -> str:
         """Return formatted conversation history excluding orchestrator summaries."""
+        # If any earlier DB operation in this request failed, the SQLAlchemy session may be
+        # in an aborted state, which would cause "current transaction is aborted" on the query below.
+        # Proactively roll back to ensure the history query can proceed cleanly.
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         # Prefer memory-backed recent messages if enabled
         if memory_enabled():
             try:
@@ -167,6 +204,22 @@ class OrchestratorAgent:
             audit_rec = None
 
         roi_defaults = (audit_rec.roi_defaults if audit_rec and isinstance(audit_rec.roi_defaults, dict) else {})
+        # NEW: ensure we have a user_id for recommendation rows now that the schema requires it.
+        user_id_for_recs = None
+        try:
+            if audit_rec and getattr(audit_rec, 'user_id', None):
+                user_id_for_recs = audit_rec.user_id
+        except Exception:
+            user_id_for_recs = None
+
+        if not user_id_for_recs:
+            # Fail fast with a clear log message instead of triggering an integrity error later.
+            logger.error(
+                "generate_recommendations: Missing user_id for audit_id=%s. "
+                "Ensure the recommendations routes are authenticated and audits have user ownership.",
+                self.audit_id,
+            )
+            return []
         property_sqft = None
         try:
             if audit_rec and audit_rec.property and audit_rec.property.sqft:
@@ -254,7 +307,20 @@ class OrchestratorAgent:
                 return None
 
         # Clear old recs
-        AuditRecommendation.query.filter_by(audit_id=self.audit_id).delete()
+        # If a previous DB operation in this request failed, the transaction may be in an
+        # aborted state, causing "current transaction is aborted" on subsequent queries.
+        # Roll back proactively, then perform the delete in its own try/except and commit.
+        try:
+            db.session.rollback()
+        except Exception:
+            # Non-fatal; proceed with delete attempt
+            pass
+        try:
+            AuditRecommendation.query.filter_by(audit_id=self.audit_id).delete()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Failed to clear existing recommendations for audit_id=%s", self.audit_id)
 
         saved = []
         for rec in all_recs:
@@ -298,6 +364,7 @@ class OrchestratorAgent:
             step_type = _normalize_step(raw_step)
             # Build the ORM row
             r = AuditRecommendation(
+                user_id=user_id_for_recs,
                 audit_id=self.audit_id,
                 step_type=step_type or "General",
                 summary=str(summary or ""),

@@ -1,6 +1,7 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from werkzeug.utils import secure_filename
-from models import Audit, AuditStep, AuditMedia, db
+from models import Audit, AuditStep, AuditMedia, Property, db
+from auth import require_auth
 from openai import OpenAI
 from supabase_utils import upload_to_supabase_and_get_url
 import os
@@ -53,6 +54,7 @@ def summarize_bill_from_pdf(pdf_path: str) -> str:
 
 # --- Routes ---
 @bp.route('/audits', methods=['POST'])
+@require_auth
 def create_audit():
     data = request.get_json()
     property_id = data.get("property_id")
@@ -61,8 +63,17 @@ def create_audit():
     if not property_id:
         return jsonify({"error": "Missing property_id"}), 400
 
+    # Check if property belongs to user
+    property_obj = Property.query.filter_by(id=property_id, user_id=g.current_user['id']).first()
+    if not property_obj:
+        return jsonify({"error": "Property not found or access denied"}), 403
+
     try:
-        new_audit = Audit(property_id=property_id, audit_type=audit_type)
+        new_audit = Audit(
+            user_id=g.current_user['id'],  # Set user_id
+            property_id=property_id, 
+            audit_type=audit_type
+        )
         db.session.add(new_audit)
         db.session.commit()
 
@@ -78,10 +89,12 @@ def create_audit():
 
 
 @bp.route('/audits/<int:audit_id>', methods=['GET'])
+@require_auth
 def get_audit(audit_id):
-    audit = Audit.query.get(audit_id)
+    # Check ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
     if not audit:
-        return jsonify({"error": "Audit not found"}), 404
+        return jsonify({"error": "Audit not found or access denied"}), 403
 
     return jsonify({
         "id": audit.id,
@@ -118,7 +131,12 @@ def get_audit_by_property(property_id):
         return jsonify({"error": "No audit found"}), 404
 
 @bp.route('/audits/<int:audit_id>/utility-bill', methods=['POST'])
+@require_auth
 def handle_utility_bill(audit_id):
+    # Ensure the audit belongs to the current user
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
     file = request.files.get('file')
     if not file:
         return jsonify({'error': 'Missing utility bill file'}), 400
@@ -152,6 +170,7 @@ def handle_utility_bill(audit_id):
 
     # Step 3: Save AuditStep
     step = AuditStep(
+        user_id=g.current_user['id'],
         audit_id=audit_id,
         step_type='interview',
         label='Utility Bill',
@@ -163,6 +182,7 @@ def handle_utility_bill(audit_id):
 
     # Step 4: Save AuditMedia
     media = AuditMedia(
+        user_id=g.current_user['id'],
         audit_id=audit_id,
         step_id=step.id,
         file_name=secure_filename(file.filename),

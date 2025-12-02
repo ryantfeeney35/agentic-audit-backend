@@ -53,7 +53,7 @@ delete from langchain_memory;
 select * from agent_conversations ;
 select * from audits;
 select * from audit_recommendations;
-select * from langchain_memory;
+select * from properties;
 
 INSERT INTO contractors (name, contact, step_type)
 VALUES 

@@ -61,6 +61,11 @@ def save_message(audit_id: int, domain: str, role: str, content: str) -> None:
         db.session.commit()
     except Exception as e:
         # Table may not exist or DB may be readonly; ignore silently but log at debug
+        try:
+            from models import db as _db
+            _db.session.rollback()
+        except Exception:
+            pass
         logger.debug("langchain_memory insert skipped: %s", e)
 
 
@@ -109,5 +114,11 @@ def get_recent_messages(audit_id: int, limit: int = 12) -> List[str]:
             out.append(f"[{role}] {content}")
         return out
     except Exception as e:
+        # Ensure the session is clean for subsequent queries if this select failed
+        try:
+            from models import db as _db
+            _db.session.rollback()
+        except Exception:
+            pass
         logger.debug("langchain_memory select skipped: %s", e)
         return []

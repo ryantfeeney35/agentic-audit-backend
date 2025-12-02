@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify
-from models import AuditMedia, AuditStep, db
+from flask import Blueprint, request, jsonify, g
+from models import AuditMedia, AuditStep, Audit, db
+from auth import require_auth
 import json
 
 bp = Blueprint("steps", __name__)
@@ -54,7 +55,13 @@ def serialize_step(step):
 
 # --- Create or update a step ---
 @bp.route("/audits/<int:audit_id>/steps", methods=["POST"])
+@require_auth
 def create_or_update_audit_step(audit_id):
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
+        
     data = request.get_json()
     step_id = data.get("id")
     step_type = data.get("step_type")
@@ -66,7 +73,7 @@ def create_or_update_audit_step(audit_id):
 
     # --- UPDATE existing step ---
     if step_id:
-        step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
+        step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id, user_id=g.current_user['id']).first()
         if not step:
             return jsonify({"error": "Step not found"}), 404
 
@@ -171,6 +178,7 @@ def create_or_update_audit_step(audit_id):
 
     new_step = AuditStep(
         audit_id=audit_id,
+        user_id=g.current_user['id'],  # Add user_id
         step_type=step_type,
         label=label,
         status=status or "Not Started",
@@ -184,16 +192,28 @@ def create_or_update_audit_step(audit_id):
 
 # --- Get all steps for an audit ---
 @bp.route("/audits/<int:audit_id>/steps", methods=["GET"])
+@require_auth
 def get_audit_steps(audit_id):
-    steps = AuditStep.query.filter_by(audit_id=audit_id).all()
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
+        
+    steps = AuditStep.query.filter_by(audit_id=audit_id, user_id=g.current_user['id']).all()
     return jsonify([serialize_step(s) for s in steps])
 
 # --- Delete a step ---
 @bp.route("/audits/<int:audit_id>/steps/<int:step_id>", methods=["DELETE"])
+@require_auth
 def delete_audit_step(audit_id, step_id):
-    step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id).first()
+    # Check audit ownership
+    audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
+    if not audit:
+        return jsonify({"error": "Audit not found or access denied"}), 403
+        
+    step = AuditStep.query.filter_by(id=step_id, audit_id=audit_id, user_id=g.current_user['id']).first()
     if not step:
-        return jsonify({"error": "Step not found"}), 404
+        return jsonify({"error": "Step not found or access denied"}), 403
     try:
         db.session.delete(step)
         db.session.commit()

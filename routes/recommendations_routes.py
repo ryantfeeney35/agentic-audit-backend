@@ -1,5 +1,6 @@
 # routes/recommendations_routes.py
-from flask import Blueprint, jsonify, request, abort, current_app
+from flask import Blueprint, jsonify, request, abort, current_app, g
+from auth import require_auth
 from agents.orchestrator import OrchestratorAgent
 from models import AuditRecommendation, db, AuditMedia, Audit
 import tempfile
@@ -12,6 +13,7 @@ from agents.roi import AtticInsulationROIInput, calculate_attic_insulation_roi
 bp = Blueprint("recommendations", __name__)
 
 @bp.route("/roi/insulation/attic", methods=["POST"])
+@require_auth
 def roi_insulation_attic():
     """Deterministic ROI calculator for attic insulation upgrades.
 
