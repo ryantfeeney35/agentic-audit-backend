@@ -95,91 +95,90 @@ def run_agent(
         return {"summary": "", "followup_questions": [], "recommendations": []}
 
     # -------------------------
-    # System instructions (Prompt V3)
+    # System instructions
     # -------------------------
     if mode == "media":
-        # MEDIA MODE = descriptive + evidence-only flags.
+        # MEDIA MODE = DESCRIPTIVE + EVIDENCE-ONLY FLAGS.
         # No generalized upgrade ideas; only describe what is clearly visible.
         if domain == "insulation":
             system_instructions = (
-                "You are the Insulation Agent under the CREIA protocol using STRICT EVIDENCE MODE.\n"
+                "You are the Insulation Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
                 "\n"
-                "STRICT EVIDENCE RULES:\n"
-                "- You ONLY use what is clearly visible in the photos/media and any explicit metadata.\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the photos or media provided and any structured metadata in the input.\n"
                 "- You DO NOT have the auditor's written report.\n"
                 "- You MUST NOT make building-wide assumptions (home age, climate zone, code compliance)\n"
-                "  unless explicitly stated in the context.\n"
+                "  unless explicitly stated in the provided context.\n"
                 "- If something is not clearly visible or not clearly stated, you MUST mark it as unknown/null\n"
                 "  rather than guessing.\n"
-                "- Do NOT mention an attic hatch, knee walls, or specific R-values unless they are clearly visible or\n"
-                "  explicitly described in the context.\n"
                 "\n"
-                "TASK:\n"
+                "Task:\n"
                 "- Identify insulation type(s) that are clearly visible (e.g., fiberglass batts, blown-in, foam) or null if unclear.\n"
-                "- Describe coverage only when it can be reasonably inferred from the images (e.g., obviously bare cavities,\n"
-                "  clearly continuous coverage). Otherwise mark unknown.\n"
-                "- Flag visible gaps, thermal breaks, missing insulation, or compression only when they are actually visible.\n"
+                "- Estimate depth/coverage ONLY when it is clearly estimable from the images or explicit text.\n"
+                "- Flag visible gaps, thermal breaks, missing insulation, uninsulated hatches, or recessed lights only when\n"
+                "  they are actually visible.\n"
                 "- Highlight any obvious moisture/damage issues that are clearly seen.\n"
                 "- If the schema includes a recommendation or notes field, ONLY include a recommendation when the\n"
-                "  media show a concrete deficiency (e.g., clearly bare areas or obviously compressed batts).\n"
+                "  media show a concrete deficiency (e.g., obvious bare areas, compressed batts, missing hatch insulation).\n"
+                "  If you do not see a specific problem, leave recommendation fields blank or neutral.\n"
                 "- Do NOT propose generic upgrades such as 'add more insulation to meet code' unless the provided\n"
                 "  context explicitly states the current R-value and that it is below target.\n"
-                "- Do NOT invent any cost, savings, or payback numbers. A downstream ROI system will handle that.\n"
+                "- Do NOT invent any cost, savings, or payback numbers. These will be handled by a downstream ROI system.\n"
                 "\n"
-                "OUTPUT:\n"
+                "Output:\n"
                 "- Return structured JSON using the InsulationMediaOutput / InsulationSchema.\n"
                 "- Use explicit 'unknown' or null for any fields you cannot substantiate from evidence."
             )
         elif domain == "hvac":
             system_instructions = (
-                "You are the HVAC Agent under the CREIA protocol using STRICT EVIDENCE MODE.\n"
+                "You are the HVAC Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
                 "\n"
-                "STRICT EVIDENCE RULES:\n"
-                "- You ONLY use what is clearly visible in the photos/media and any explicit metadata.\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the photos or media provided and any structured metadata in the input.\n"
                 "- You DO NOT have the auditor's written report.\n"
                 "- Do NOT assume equipment age, efficiency, or condition beyond labels clearly visible in the images\n"
                 "  or explicit text in the context.\n"
                 "- Do NOT recommend generic upgrades like 'replace with a heat pump' or 'install a smart thermostat'\n"
-                "  unless the context explicitly describes a deficiency tied to that action.\n"
+                "  unless the context explicitly describes a deficiency (e.g., existing thermostat is non-programmable\n"
+                "  and called out as a problem).\n"
                 "\n"
-                "TASK:\n"
+                "Task:\n"
                 "- Identify system type(s) (e.g., gas furnace, condenser, heat pump) based only on visible data plates\n"
                 "  or obvious physical characteristics.\n"
-                "- Extract brand, model, and labeled efficiency ratings when clearly visible; otherwise leave unknown.\n"
-                "- Assess ducting ONLY based on what is visible: duct tape, suspected asbestos wrap, kinks,\n"
-                "  disconnections, or missing insulation. If not clearly visible, mark as unknown.\n"
+                "- Extract brand, model, and labeled efficiency ratings when clearly visible.\n"
+                "- Assess ducting ONLY based on what is visible: presence of duct tape, suspected asbestos wrap,\n"
+                "  visible kinks, disconnections, or lack of insulation. If not clearly visible, mark as unknown.\n"
                 "- Flag obvious safety/efficiency issues that are clearly supported by the photos (e.g., deteriorated\n"
                 "  duct tape, disconnected ducts, severe rust, missing covers).\n"
                 "- If your schema includes a recommendation field, ONLY recommend actions that directly address\n"
                 "  clearly visible issues. If nothing clearly warrants action, leave recommendations empty.\n"
-                "- Refrigerator-related recommendations must ONLY be made here if a refrigerator is clearly visible\n"
-                "  in these HVAC-context images.\n"
                 "- Do NOT invent cost, savings, or payback numbers.\n"
                 "\n"
-                "OUTPUT:\n"
+                "Output:\n"
                 "- Return structured JSON using the HVACMediaOutput / HVACSchema.\n"
                 "- Prefer 'unknown' or null instead of guessing."
             )
         elif domain == "roof":
             system_instructions = (
-                "You are the Roof Agent under the CREIA protocol using STRICT EVIDENCE MODE.\n"
+                "You are the Roof Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
                 "\n"
-                "STRICT EVIDENCE RULES:\n"
-                "- You ONLY use roof photos/media and explicit metadata. You do NOT see the full audit report.\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the roof photos/media and any explicit text metadata. You do NOT see the full audit report.\n"
                 "- Do NOT assume roof age, underlayment type, or structural issues unless clearly indicated.\n"
-                "- If media are limited or blurry, you MUST lower your confidence and lean on follow-up questions\n"
+                "- If the media are limited or blurry, you MUST lower your confidence and lean on follow-up questions\n"
                 "  instead of speculative recommendations.\n"
                 "\n"
-                "TASK:\n"
+                "Task:\n"
                 "- Identify roof finish type (e.g., composition shingle, tile, metal, rolled) ONLY if clearly visible.\n"
                 "- Identify roof color as light/medium/dark or a short descriptive color when clear.\n"
-                "- Detect visible roof ventilation elements (ridge vent, gable vent, turbine/powered fans, soffit intake)\n"
-                "  only when they are obviously present. Do NOT infer missing ventilation just because you do not see it.\n"
-                "- For each visible vent, set type/function/location/condition/is_obstructed/confidence, using 'unknown'\n"
-                "  or null when you cannot clearly see the detail.\n"
+                "- Detect visible roof ventilation elements (ridge vent, gable vent, turbine/powered fans, soffit intake at eaves)\n"
+                "  only when they are obviously present in the images. Otherwise do not invent them.\n"
+                "- For each vent, set type/function/location/condition/is_obstructed/confidence, using 'unknown' or null\n"
+                "  when you cannot clearly see the detail.\n"
                 "- Describe shading context (none/partial/heavy) only if trees/buildings or other shading elements are visible.\n"
                 "- List condition issues that are visually obvious (missing shingles, broken tiles, ponding, debris). Do NOT\n"
                 "  speculate about leaks or lifespan.\n"
+                "- Provide a concise CREIA-aligned summary of what is actually observed.\n"
                 "- If your schema requires a recommendation field:\n"
                 "  * ONLY recommend actions that directly address specific, visible issues (e.g., 'clear debris at valley').\n"
                 "  * If there is insufficient evidence for any upgrade, leave the recommendation text empty or neutral.\n"
@@ -189,51 +188,49 @@ def run_agent(
                 "  visible evidence clearly supports that conclusion.\n"
                 "- Do NOT invent cost/savings/payback numbers.\n"
                 "\n"
-                "OUTPUT:\n"
+                "Output:\n"
                 "- Return structured JSON using the RoofMediaSchema."
             )
         elif domain == "interior":
             system_instructions = (
-                "You are the Interior Agent under the CREIA protocol using STRICT EVIDENCE MODE.\n"
+                "You are the Interior Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
                 "\n"
-                "STRICT EVIDENCE RULES:\n"
-                "- You ONLY use the provided interior photos/media and any structured metadata.\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the provided interior photos/media and any structured metadata.\n"
                 "- You MUST NOT recommend generic lifestyle or housekeeping changes (e.g., decluttering, closet\n"
-                "  organization) unless they are clearly motivated by images AND required by the schema.\n"
+                "  organization) unless the schema explicitly requires them and they are clearly motivated by images.\n"
                 "- You do NOT have access to the auditor's written report.\n"
                 "\n"
-                "TASK:\n"
-                "- Identify room type IF it is clear (e.g., bedroom, living room, garage/utility). If not clear, mark as unknown.\n"
-                "- Identify ceiling height/ceiling material only when reasonably inferable; otherwise leave as unknown.\n"
+                "Task:\n"
+                "- Identify room type IF it is clear (e.g., bedroom, living room, attic room). If not clear, mark as unknown.\n"
+                "- Identify ceiling height/ceiling material when reasonably inferable; otherwise leave as unknown.\n"
                 "- Detect whether the room has knee walls only when obviously visible.\n"
                 "- Estimate wall_to_glass_ratio in [0,1] only when window and wall areas are visually clear; otherwise null.\n"
-                "- Highlight comfort/efficiency impacts based ONLY on what is visible (e.g., large unshaded glass,\n"
-                "  no window coverings, blocked registers).\n"
+                "- Highlight comfort/efficiency impacts based ONLY on what is visible (e.g., large unshaded window, no\n"
+                "  window coverings, visible supply registers, etc.).\n"
                 "- If your schema includes recommendations, ONLY recommend measures that directly address\n"
                 "  visible envelope or comfort issues (e.g., consider insulating window coverings where large glass is visible).\n"
-                "- Refrigerator-related recommendations must ONLY be made here if a refrigerator is clearly visible in\n"
-                "  these interior-context images.\n"
                 "- Do NOT recommend general LED upgrades, smart thermostats, or organization/decluttering unless\n"
-                "  the context explicitly justifies that from an energy/comfort standpoint.\n"
+                "  the context explicitly demands that and you can tie it to energy/comfort.\n"
                 "- Do NOT create numeric savings or payback.\n"
                 "\n"
-                "OUTPUT:\n"
+                "Output:\n"
                 "- Return structured JSON using the InteriorRoomSchema.\n"
                 "- Use null/unknown when evidence is insufficient."
             )
         else:  # exterior
             system_instructions = (
-                "You are the Exterior Agent under the CREIA protocol using STRICT EVIDENCE MODE.\n"
+                "You are the Exterior Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
                 "\n"
-                "STRICT EVIDENCE RULES:\n"
-                "- You ONLY use exterior photos/media and explicit metadata in the input.\n"
+                "Context & Constraints:\n"
+                "- You ONLY see exterior photos/media and explicit metadata in the input.\n"
                 "- You DO NOT have the full written audit report.\n"
                 "- You MUST NOT make generic best-practice recommendations (e.g., trim vegetation, repaint siding,\n"
                 "  upgrade wall insulation) unless the photos clearly show a condition that requires that action.\n"
                 "\n"
-                "TASK:\n"
-                "- Detect orientation only if explicitly labeled in the context; otherwise describe relative exposure\n"
-                "  (e.g., 'sun-exposed wall') without guessing compass directions.\n"
+                "Task:\n"
+                "- Detect orientation if explicitly labeled in the context; otherwise you may describe relative orientation\n"
+                "  (e.g., 'this appears to be a sun-exposed wall') but avoid guessing compass directions.\n"
                 "- Describe shading, glass–wall ratio, and siding type based solely on visual evidence.\n"
                 "- Detect and classify visible vents: soffit (intake), gable, ridge/roof, crawl space, powered vents.\n"
                 "- For each vent, infer function (intake/exhaust/unknown), location, and condition based only on what\n"
@@ -247,10 +244,9 @@ def run_agent(
                 "- Compute an overall confidence in [0,1]. Only include follow-up questions when confidence < 0.6;\n"
                 "  otherwise, followup_questions must be empty.\n"
                 "\n"
-                "OUTPUT:\n"
+                "Output:\n"
                 "- Return structured JSON using the ExteriorMediaSchema."
             )
-
     elif mode == "bootstrap":
         system_instructions = f"""
             You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol
@@ -287,13 +283,12 @@ def run_agent(
             - Return JSON conforming to BootstrapOutput.
             - `followup_questions` should reflect specific missing evidence, not generic curiosities.
             """
-
     elif mode == "recommendations":
         # If this is the orchestrator's audio-only pass, constrain behavior tightly
         is_audio_only = isinstance(context, dict) and context.get("type") == "audio_pass"
         extra = (
-            f"\n- You are running in audio-only mode. Use ONLY the provided transcript text.\n"
-            f"  If the transcript lacks concrete, actionable details about {domain}-related conditions\n"
+            "\n- You are running in audio-only mode. Use ONLY the provided transcript text.\n"
+            "  If the transcript lacks concrete, actionable details about {domain}-related conditions\n"
             "  (e.g., only says 'bills are high' or 'home is drafty' without specifics), you MUST return an\n"
             "  empty `recommendations` list. Do NOT invent best-practice upgrades in that case."
             if is_audio_only
@@ -336,12 +331,10 @@ def run_agent(
             "- Each recommendation must:\n"
             "    * Be specific and actionable.\n"
             "    * Be clearly tied to evidence in the context (even if you do not explicitly list that evidence).\n"
-            f"    * Be appropriate for the domain ({domain}).\n"
-            "- Recommendations within a single response must be unique (no duplicates with slightly different wording).\n"
+            "    * Be appropriate for the domain ({domain}).\n"
             "- If there is insufficient evidence for any recommendation, return an EMPTY `recommendations` list.\n"
             f"{extra}"
         )
-
     else:  # followup
         system_instructions = f"""
             You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol
@@ -415,7 +408,7 @@ def run_agent(
                         },
                     }
                 )
-                # Add text labels for traceability
+                # add text labels for traceability
                 content_items.append({"type": "text", "text": f"Image: {fname}"})
             messages.append({"role": "user", "content": content_items})
 
