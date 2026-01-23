@@ -145,6 +145,14 @@ class AuditRecommendation(db.Model):
     recommended_media_source = db.Column(db.String, nullable=True)
     # Per-recommendation ROI inputs (e.g., attic_current_r, attic_target_r, net_upgrade_cost_usd, attic_area_sqft)
     roi_inputs = db.Column(JSONB, default=dict)
+    
+    # Service catalog alignment fields
+    # ID of the matched service from the catalog (e.g., 'hvac-ducting-repair')
+    service_id = db.Column(db.String(100), nullable=True)
+    # Priority order for work sequencing (lower = do first, from catalog)
+    order_of_completion = db.Column(db.Integer, nullable=True)
+    # Whether this service qualifies for rebates (from catalog)
+    rebate_eligible = db.Column(db.Boolean, nullable=True)
 
     audit = relationship("Audit", back_populates="recommendations")
     # relationship to the suggested media (may be None)

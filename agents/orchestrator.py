@@ -3,6 +3,7 @@ import logging
 from .base_agent import run_agent
 from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context
 from .schemas import StepType
+from .services.filter import filter_and_enrich_recommendations
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
@@ -299,6 +300,33 @@ class OrchestratorAgent:
                 r["_source_pass"] = "ai"
                 all_recs.append(r)
 
+        # --- Service Catalog Filter ---
+        # Filter recommendations to only include those matching the service catalog
+        # and enrich with service metadata (service_id, order_of_completion, rebate_eligible)
+        try:
+            accepted_recs, rejected_recs = filter_and_enrich_recommendations(
+                all_recs,
+                domain=None,  # No domain filter since we've merged all domains
+                confidence_threshold=0.5,
+                strict=False,
+            )
+            if rejected_recs:
+                logger.info(
+                    "Service catalog filter: %d accepted, %d rejected",
+                    len(accepted_recs),
+                    len(rejected_recs),
+                )
+                for rej in rejected_recs:
+                    logger.debug(
+                        "Rejected recommendation: %s (reason=%s)",
+                        rej.get("summary", "")[:60],
+                        rej.get("_rejection_reason", "unknown"),
+                    )
+            all_recs = accepted_recs
+        except Exception:
+            logger.exception("Service catalog filter failed; proceeding with unfiltered recommendations")
+            # Continue with original recs if filter fails
+
         # Coerce numeric fields safely
         def safe_float(val):
             try:
@@ -375,6 +403,10 @@ class OrchestratorAgent:
                 # accepting arbitrary freeform 'source' strings that agents may return
                 # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
                 source=(rec.get("_source_pass") or "ai"),
+                # Service catalog alignment fields (populated by filter)
+                service_id=rec.get("service_id"),
+                order_of_completion=rec.get("order_of_completion"),
+                rebate_eligible=rec.get("rebate_eligible"),
             )
 
             # Opportunistically persist ROI inputs for attic insulation so the UI/API

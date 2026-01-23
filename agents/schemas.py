@@ -15,10 +15,25 @@ class StepType(str, Enum):
 class Recommendation(BaseModel):
     step_type: StepType
     summary: str
-    annual_savings_usd: Optional[float]
-    upgrade_cost_usd: Optional[float]
-    payback_years: Optional[float]
+    annual_savings_usd: Optional[float] = None
+    upgrade_cost_usd: Optional[float] = None
+    payback_years: Optional[float] = None
     source: Optional[str] = None
+    # Service catalog alignment fields (populated by post-processing filter)
+    service_id: Optional[str] = Field(
+        default=None,
+        description="ID of the matched service from the catalog (e.g., 'hvac-ducting-repair')",
+    )
+    order_of_completion: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Priority order for work sequencing (lower = do first)",
+    )
+    rebate_eligible: Optional[bool] = Field(
+        default=None,
+        description="Whether this service qualifies for rebates",
+    )
 
 # -------------------------
 # Domain schemas
