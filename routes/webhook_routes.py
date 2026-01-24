@@ -365,27 +365,52 @@ def handle_authorization_complete(event: dict) -> bool:
         from models import UtilityConnection, db
         from utils.providers.registry import get_registry
         
-        # Find connection by authorization_uid in provider_metadata
-        # Use raw SQL filter for JSONB field
+        connection = None
+        
+        # Strategy 1: Find by authorization_uid already stored in provider_metadata
+        # (for re-processing or duplicate webhooks)
         connection = UtilityConnection.query.filter(
             UtilityConnection.provider_name == 'utilityapi',
-            UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
+            UtilityConnection.provider_metadata['authorization_uid'].astext == str(authorization_uid)
         ).first()
         
-        # If not found by authorization_uid, try parsing referral
+        # Strategy 2: Find by referral (oauth_state) if provided
         if not connection and referral:
-            parts = referral.split('_')
-            if len(parts) >= 4 and parts[0] == 'audit':
-                try:
-                    audit_id = int(parts[1])
-                    user_id = parts[3] if len(parts) > 3 else None
-                    connection = UtilityConnection.query.filter_by(
-                        audit_id=audit_id,
-                        provider_name='utilityapi',
-                        status='pending_authorization'
-                    ).first()
-                except ValueError:
-                    pass
+            connection = UtilityConnection.query.filter_by(
+                provider_name='utilityapi',
+                oauth_state=referral,
+                status='pending_authorization'
+            ).first()
+            
+            # Also try parsing audit_id from referral format: "audit_{id}_{token}"
+            if not connection:
+                parts = referral.split('_')
+                if len(parts) >= 2 and parts[0] == 'audit':
+                    try:
+                        audit_id = int(parts[1])
+                        connection = UtilityConnection.query.filter_by(
+                            audit_id=audit_id,
+                            provider_name='utilityapi',
+                            status='pending_authorization'
+                        ).first()
+                    except ValueError:
+                        pass
+        
+        # Strategy 3: If referral is empty, try to find ANY pending utilityapi connection
+        # This handles cases where UtilityAPI doesn't send referral back
+        # WARNING: This could match wrong connection if user has multiple pending authorizations
+        if not connection:
+            # Get the most recently created pending utilityapi connection
+            connection = UtilityConnection.query.filter_by(
+                provider_name='utilityapi',
+                status='pending_authorization'
+            ).order_by(UtilityConnection.created_at.desc()).first()
+            
+            if connection:
+                logger.warning(
+                    "Found pending connection by fallback (no referral): connection_id=%s audit_id=%s",
+                    connection.id, connection.audit_id
+                )
         
         if not connection:
             logger.warning(
@@ -399,7 +424,7 @@ def handle_authorization_complete(event: dict) -> bool:
             connection.status = 'connected'
             # Store authorization_uid in provider_metadata
             metadata = connection.provider_metadata or {}
-            metadata['authorization_uid'] = authorization_uid
+            metadata['authorization_uid'] = str(authorization_uid)
             connection.provider_metadata = metadata
             connection.updated_at = datetime.utcnow()
             connection.last_sync_error = None
@@ -413,6 +438,12 @@ def handle_authorization_complete(event: dict) -> bool:
             # Queue background data sync (don't block webhook response)
             # For now, just mark as needing sync - a background job can pick this up
             # In future: use Celery, RQ, or similar for async processing
+        elif connection.status == 'connected':
+            # Already connected - this is a duplicate webhook, just acknowledge
+            logger.info(
+                "WEBHOOK_AUTH_COMPLETE_DUPLICATE | connection_id=%s already connected",
+                connection.id
+            )
             
         return True
         
