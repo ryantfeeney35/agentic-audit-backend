@@ -493,14 +493,11 @@ def get_utility_connection(audit_id):
             'connection': {
                 'id': connection.id,
                 'provider_name': connection.provider_name,
-                'provider_type': connection.provider_type,
                 'utility_name': connection.utility_name,
                 'status': connection.status,
                 'data_scope': connection.data_scope,
                 'last_sync_at': connection.last_sync_at.isoformat() if connection.last_sync_at else None,
-                'error_message': connection.error_message,
-                'fallback_attempted': connection.fallback_attempted,
-                'fallback_provider': connection.fallback_provider,
+                'last_sync_error': connection.last_sync_error,
                 'created_at': connection.created_at.isoformat(),
                 'updated_at': connection.updated_at.isoformat() if connection.updated_at else None
             }
@@ -558,7 +555,7 @@ def sync_utility_data(audit_id):
             if result.success:
                 connection.status = 'connected'
                 connection.last_sync_at = datetime.utcnow()
-                connection.error_message = None
+                connection.last_sync_error = None
                 
                 # Log successful sync with record count
                 log_data_sync_event(
@@ -571,7 +568,7 @@ def sync_utility_data(audit_id):
                 )
             else:
                 connection.status = 'connected'  # Keep connected, just note sync failure
-                connection.error_message = result.error
+                connection.last_sync_error = result.error
                 
                 # Log sync failure
                 log_data_sync_event(
@@ -591,7 +588,7 @@ def sync_utility_data(audit_id):
             
         except Exception as sync_error:
             connection.status = 'connected'
-            connection.error_message = str(sync_error)
+            connection.last_sync_error = str(sync_error)
             db.session.commit()
             
             # Log exception
@@ -734,7 +731,6 @@ def submit_manual_utility_data(audit_id):
                 user_id=user_id,
                 audit_id=audit_id,
                 provider_name='manual',
-                provider_type='manual',
                 utility_name=utility_name,
                 status='connected',
                 data_scope=data_scope

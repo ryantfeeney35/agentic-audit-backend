@@ -360,13 +360,14 @@ def handle_authorization_complete(event: dict) -> bool:
         from models import UtilityConnection, db
         from utils.providers.registry import get_registry
         
-        # Find connection by external_account_id (authorization_uid)
-        connection = UtilityConnection.query.filter_by(
-            external_account_id=authorization_uid,
-            provider_name='utilityapi'
+        # Find connection by authorization_uid in provider_metadata
+        # Use raw SQL filter for JSONB field
+        connection = UtilityConnection.query.filter(
+            UtilityConnection.provider_name == 'utilityapi',
+            UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
         ).first()
         
-        # If not found by external_account_id, try parsing referral
+        # If not found by authorization_uid, try parsing referral
         if not connection and referral:
             parts = referral.split('_')
             if len(parts) >= 4 and parts[0] == 'audit':
@@ -391,9 +392,12 @@ def handle_authorization_complete(event: dict) -> bool:
         # Update connection status (idempotent - check current status)
         if connection.status == 'pending_authorization':
             connection.status = 'connected'
-            connection.external_account_id = authorization_uid
+            # Store authorization_uid in provider_metadata
+            metadata = connection.provider_metadata or {}
+            metadata['authorization_uid'] = authorization_uid
+            connection.provider_metadata = metadata
             connection.updated_at = datetime.utcnow()
-            connection.error_message = None
+            connection.last_sync_error = None
             db.session.commit()
             
             logger.info(
@@ -437,10 +441,11 @@ def handle_data_available(event: dict, event_type: str) -> bool:
         connection = None
         
         if authorization_uid:
-            connection = UtilityConnection.query.filter_by(
-                external_account_id=authorization_uid,
-                provider_name='utilityapi',
-                status='connected'
+            # Search in provider_metadata JSONB field
+            connection = UtilityConnection.query.filter(
+                UtilityConnection.provider_name == 'utilityapi',
+                UtilityConnection.status == 'connected',
+                UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
             ).first()
         
         if not connection and referral:
@@ -503,9 +508,10 @@ def handle_authorization_revoked(event: dict) -> bool:
     try:
         from models import UtilityConnection, db
         
-        connection = UtilityConnection.query.filter_by(
-            external_account_id=authorization_uid,
-            provider_name='utilityapi'
+        # Search in provider_metadata JSONB field
+        connection = UtilityConnection.query.filter(
+            UtilityConnection.provider_name == 'utilityapi',
+            UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
         ).first()
         
         if connection and connection.status != 'revoked':
