@@ -205,7 +205,7 @@ def connect_utility():
         existing = UtilityConnection.query.filter_by(
             audit_id=audit_id,
             user_id=user_id
-        ).filter(UtilityConnection.connection_status.in_([
+        ).filter(UtilityConnection.status.in_([
             'connected', 'pending_authorization', 'sync_in_progress'
         ])).first()
         
@@ -213,7 +213,7 @@ def connect_utility():
             return jsonify({
                 'error': 'Active utility connection already exists for this audit',
                 'existing_connection_id': existing.id,
-                'existing_status': existing.connection_status
+                'existing_status': existing.status
             }), 409
         
         utility_name = data.get('utility_name', 'SDGE').upper()
@@ -372,7 +372,7 @@ def oauth_callback():
         # Trigger async data sync if connected
         if result.connection_id:
             conn = UtilityConnection.query.get(result.connection_id)
-            if conn and conn.connection_status == 'connected':
+            if conn and conn.status == 'connected':
                 # Optionally trigger sync here or let frontend trigger it
                 log_data_sync_event(conn.id, conn.provider_name, "oauth_complete", True)
         
@@ -442,7 +442,7 @@ def utilityapi_webhook():
                     conn = UtilityConnection.query.filter_by(
                         audit_id=audit_id,
                         provider_name='utilityapi',
-                        connection_status='connected'
+                        status='connected'
                     ).first()
                     
                     if conn:
@@ -489,13 +489,13 @@ def get_utility_connection(audit_id):
             }), 200
         
         return jsonify({
-            'connected': connection.connection_status == 'connected',
+            'connected': connection.status == 'connected',
             'connection': {
                 'id': connection.id,
                 'provider_name': connection.provider_name,
                 'provider_type': connection.provider_type,
                 'utility_name': connection.utility_name,
-                'connection_status': connection.connection_status,
+                'status': connection.status,
                 'data_scope': connection.data_scope,
                 'last_sync_at': connection.last_sync_at.isoformat() if connection.last_sync_at else None,
                 'error_message': connection.error_message,
@@ -531,7 +531,7 @@ def sync_utility_data(audit_id):
         connection = UtilityConnection.query.filter_by(
             audit_id=audit_id,
             user_id=user_id,
-            connection_status='connected'
+            status='connected'
         ).first()
         
         if not connection:
@@ -547,7 +547,7 @@ def sync_utility_data(audit_id):
             return jsonify({'error': f'Provider {connection.provider_name} not found'}), 500
         
         # Update status
-        connection.connection_status = 'sync_in_progress'
+        connection.status = 'sync_in_progress'
         db.session.commit()
         
         start_time = time.time()
@@ -556,7 +556,7 @@ def sync_utility_data(audit_id):
             duration_ms = (time.time() - start_time) * 1000
             
             if result.success:
-                connection.connection_status = 'connected'
+                connection.status = 'connected'
                 connection.last_sync_at = datetime.utcnow()
                 connection.error_message = None
                 
@@ -570,7 +570,7 @@ def sync_utility_data(audit_id):
                     connection.id, connection.provider_name, result.records_imported, duration_ms
                 )
             else:
-                connection.connection_status = 'connected'  # Keep connected, just note sync failure
+                connection.status = 'connected'  # Keep connected, just note sync failure
                 connection.error_message = result.error
                 
                 # Log sync failure
@@ -590,7 +590,7 @@ def sync_utility_data(audit_id):
             }), 200 if result.success else 400
             
         except Exception as sync_error:
-            connection.connection_status = 'connected'
+            connection.status = 'connected'
             connection.error_message = str(sync_error)
             db.session.commit()
             
@@ -626,7 +626,7 @@ def get_utility_summary(audit_id):
         connection = UtilityConnection.query.filter_by(
             audit_id=audit_id,
             user_id=user_id
-        ).filter(UtilityConnection.connection_status.in_(['connected', 'sync_in_progress'])).first()
+        ).filter(UtilityConnection.status.in_(['connected', 'sync_in_progress'])).first()
         
         if not connection:
             return jsonify({
@@ -659,12 +659,12 @@ def get_utility_summary(audit_id):
             }
         
         return jsonify({
-            'connected': connection.connection_status == 'connected',
+            'connected': connection.status == 'connected',
             'connection': {
                 'id': connection.id,
                 'provider_name': connection.provider_name,
                 'utility_name': connection.utility_name,
-                'status': connection.connection_status,
+                'status': connection.status,
                 'last_sync': connection.last_sync_at.isoformat() if connection.last_sync_at else None
             },
             'summary': summary_data
@@ -726,7 +726,7 @@ def submit_manual_utility_data(audit_id):
         
         if existing:
             connection = existing
-            connection.connection_status = 'connected'
+            connection.status = 'connected'
             connection.utility_name = utility_name
             connection.data_scope = data_scope
         else:
@@ -736,7 +736,7 @@ def submit_manual_utility_data(audit_id):
                 provider_name='manual',
                 provider_type='manual',
                 utility_name=utility_name,
-                connection_status='connected',
+                status='connected',
                 data_scope=data_scope
             )
             db.session.add(connection)
@@ -839,7 +839,7 @@ def delete_utility_connection(audit_id):
         connection = UtilityConnection.query.filter_by(
             audit_id=audit_id,
             user_id=user_id
-        ).filter(UtilityConnection.connection_status != 'revoked').first()
+        ).filter(UtilityConnection.status != 'revoked').first()
         
         if not connection:
             return jsonify({'error': 'No active utility connection for this audit'}), 404
@@ -853,7 +853,7 @@ def delete_utility_connection(audit_id):
                 logger.warning(f"Provider revoke failed: {revoke_error}")
         
         # Update connection status
-        connection.connection_status = 'revoked'
+        connection.status = 'revoked'
         connection.access_token_encrypted = None
         connection.refresh_token_encrypted = None
         

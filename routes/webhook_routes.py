@@ -376,7 +376,7 @@ def handle_authorization_complete(event: dict) -> bool:
                     connection = UtilityConnection.query.filter_by(
                         audit_id=audit_id,
                         provider_name='utilityapi',
-                        connection_status='pending_authorization'
+                        status='pending_authorization'
                     ).first()
                 except ValueError:
                     pass
@@ -389,8 +389,8 @@ def handle_authorization_complete(event: dict) -> bool:
             return False
         
         # Update connection status (idempotent - check current status)
-        if connection.connection_status == 'pending_authorization':
-            connection.connection_status = 'connected'
+        if connection.status == 'pending_authorization':
+            connection.status = 'connected'
             connection.external_account_id = authorization_uid
             connection.updated_at = datetime.utcnow()
             connection.error_message = None
@@ -440,7 +440,7 @@ def handle_data_available(event: dict, event_type: str) -> bool:
             connection = UtilityConnection.query.filter_by(
                 external_account_id=authorization_uid,
                 provider_name='utilityapi',
-                connection_status='connected'
+                status='connected'
             ).first()
         
         if not connection and referral:
@@ -451,7 +451,7 @@ def handle_data_available(event: dict, event_type: str) -> bool:
                     connection = UtilityConnection.query.filter_by(
                         audit_id=audit_id,
                         provider_name='utilityapi',
-                        connection_status='connected'
+                        status='connected'
                     ).first()
                 except ValueError:
                     pass
@@ -508,8 +508,8 @@ def handle_authorization_revoked(event: dict) -> bool:
             provider_name='utilityapi'
         ).first()
         
-        if connection and connection.connection_status != 'revoked':
-            connection.connection_status = 'revoked'
+        if connection and connection.status != 'revoked':
+            connection.status = 'revoked'
             connection.updated_at = datetime.utcnow()
             db.session.commit()
             
