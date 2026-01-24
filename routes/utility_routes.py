@@ -3,6 +3,12 @@ Utility Routes Blueprint
 
 Routes for utility connection management, OAuth callbacks, 
 data synchronization, and usage summary retrieval.
+
+Includes structured logging/analytics for:
+- Connection attempts (provider, utility, user)
+- Connection results (success/failure, fallback usage)
+- Data sync events (records synced, errors)
+- Provider waterfall sequences
 """
 
 from flask import Blueprint, request, jsonify, g, redirect, url_for
@@ -11,6 +17,7 @@ from models import db, UtilityConnection, UtilityUsageData, UtilityUsageSummary,
 from utils.providers.registry import get_registry
 from datetime import datetime
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +25,117 @@ utility_bp = Blueprint('utility', __name__, url_prefix='/api/utility')
 
 # Get the provider registry instance
 registry = get_registry()
+
+
+# ============================================================================
+# Analytics/Logging Helpers for Utility Connection Monitoring
+# ============================================================================
+
+def log_connection_attempt(audit_id: int, user_id: int, provider: str, utility_name: str):
+    """Log structured analytics for connection attempt."""
+    logger.info(
+        "UTILITY_CONNECTION_ATTEMPT | audit=%s user=%s provider=%s utility=%s",
+        audit_id, user_id, provider, utility_name,
+        extra={
+            "event_type": "connection_attempt",
+            "audit_id": audit_id,
+            "user_id": user_id,
+            "provider": provider,
+            "utility_name": utility_name,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+
+def log_connection_result(
+    audit_id: int, 
+    user_id: int, 
+    provider: str, 
+    success: bool, 
+    fallback_used: bool = False,
+    original_provider: str = None,
+    error: str = None,
+    duration_ms: float = None
+):
+    """Log structured analytics for connection result."""
+    status = "SUCCESS" if success else "FAILED"
+    fallback_info = f" (fallback from {original_provider})" if fallback_used else ""
+    error_info = f" error={error}" if error else ""
+    duration_info = f" duration_ms={duration_ms:.1f}" if duration_ms else ""
+    
+    log_data = {
+        "event_type": "connection_result",
+        "audit_id": audit_id,
+        "user_id": user_id,
+        "provider": provider,
+        "success": success,
+        "fallback_used": fallback_used,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    if original_provider:
+        log_data["original_provider"] = original_provider
+    if error:
+        log_data["error"] = error
+    if duration_ms is not None:
+        log_data["duration_ms"] = duration_ms
+    
+    level = logging.INFO if success else logging.WARNING
+    logger.log(
+        level, 
+        f"UTILITY_CONNECTION_{status} | audit=%s user=%s provider=%s{fallback_info}{error_info}{duration_info}",
+        audit_id, user_id, provider,
+        extra=log_data
+    )
+
+
+def log_data_sync_event(
+    connection_id: int, 
+    provider: str, 
+    event: str, 
+    success: bool = True,
+    records_count: int = None,
+    error: str = None
+):
+    """Log structured analytics for data sync events."""
+    status = "SUCCESS" if success else "FAILED"
+    records_info = f" records={records_count}" if records_count is not None else ""
+    error_info = f" error={error}" if error else ""
+    
+    log_data = {
+        "event_type": "data_sync",
+        "connection_id": connection_id,
+        "provider": provider,
+        "sync_event": event,
+        "success": success,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    if records_count is not None:
+        log_data["records_count"] = records_count
+    if error:
+        log_data["error"] = error
+    
+    level = logging.INFO if success else logging.ERROR
+    logger.log(
+        level,
+        f"UTILITY_DATA_SYNC_{status} | connection=%s provider=%s event=%s{records_info}{error_info}",
+        connection_id, provider, event,
+        extra=log_data
+    )
+
+
+def log_provider_waterfall(audit_id: int, waterfall_sequence: list, final_provider: str):
+    """Log the waterfall sequence for provider selection."""
+    logger.info(
+        "UTILITY_PROVIDER_WATERFALL | audit=%s sequence=%s final=%s",
+        audit_id, "->".join(waterfall_sequence), final_provider,
+        extra={
+            "event_type": "provider_waterfall",
+            "audit_id": audit_id,
+            "waterfall_sequence": waterfall_sequence,
+            "final_provider": final_provider,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
 
 
 @utility_bp.route('/providers', methods=['GET'])
@@ -106,26 +224,67 @@ def connect_utility():
         if data_scope not in ['electric', 'gas', 'both']:
             return jsonify({'error': 'data_scope must be "electric", "gas", or "both"'}), 400
         
+        # Start timing for analytics
+        start_time = time.time()
+        waterfall_sequence = []
+        fallback_used = False
+        original_provider = None
+        
         # Use preferred provider if specified, otherwise use waterfall
         if preferred_provider:
+            log_connection_attempt(audit_id, user_id, preferred_provider, utility_name)
+            waterfall_sequence.append(preferred_provider)
+            
             provider = registry.get_provider(preferred_provider)
             if not provider:
+                log_connection_result(audit_id, user_id, preferred_provider, False, error="unknown_provider")
                 return jsonify({'error': f'Unknown provider: {preferred_provider}'}), 400
             if not provider.is_available():
+                log_connection_result(audit_id, user_id, preferred_provider, False, error="provider_unavailable")
                 return jsonify({'error': f'Provider {preferred_provider} is not available'}), 400
             
             result = provider.connect(audit_id, user_id, data_scope)
             provider_used = preferred_provider
         else:
-            # Use waterfall
+            # Use waterfall - log initial attempt
+            log_connection_attempt(audit_id, user_id, "waterfall", utility_name)
+            
             result = registry.connect(audit_id, user_id, utility_name, data_scope)
             provider_used = result.provider_used if hasattr(result, 'provider_used') else None
+            
+            # Track waterfall sequence if available
+            if hasattr(result, 'providers_tried'):
+                waterfall_sequence = result.providers_tried
+                if len(waterfall_sequence) > 1:
+                    fallback_used = True
+                    original_provider = waterfall_sequence[0]
+            elif provider_used:
+                waterfall_sequence = [provider_used]
+        
+        # Calculate duration
+        duration_ms = (time.time() - start_time) * 1000
         
         if not result.success:
+            log_connection_result(
+                audit_id, user_id, provider_used or "unknown", 
+                False, fallback_used, original_provider, 
+                result.error, duration_ms
+            )
             return jsonify({
                 'error': result.error or 'Connection failed',
                 'connection_id': result.connection_id
             }), 400
+        
+        # Log successful connection
+        log_connection_result(
+            audit_id, user_id, provider_used or "unknown",
+            True, fallback_used, original_provider,
+            duration_ms=duration_ms
+        )
+        
+        # Log waterfall sequence if multiple providers were tried
+        if len(waterfall_sequence) > 1:
+            log_provider_waterfall(audit_id, waterfall_sequence, provider_used)
         
         response = {
             'auth_url': result.auth_url,
@@ -169,6 +328,11 @@ def oauth_callback():
         
         if error:
             logger.error(f"OAuth error: {error} - {error_description}")
+            logger.warning(
+                "UTILITY_OAUTH_ERROR | error=%s description=%s",
+                error, error_description,
+                extra={"event_type": "oauth_error", "error": error, "description": error_description}
+            )
             # Redirect to frontend with error
             return redirect(f"/utility/callback?error={error}&description={error_description}")
         
@@ -176,18 +340,41 @@ def oauth_callback():
             return jsonify({'error': 'Missing code or state parameter'}), 400
         
         # Delegate to registry which routes to appropriate provider
+        start_time = time.time()
         result = registry.handle_callback(code, state)
+        duration_ms = (time.time() - start_time) * 1000
         
         if not result.success:
             logger.error(f"Callback handling failed: {result.error}")
+            logger.warning(
+                "UTILITY_OAUTH_CALLBACK_FAILED | connection=%s error=%s duration_ms=%.1f",
+                result.connection_id, result.error, duration_ms,
+                extra={
+                    "event_type": "oauth_callback_failed",
+                    "connection_id": result.connection_id,
+                    "error": result.error,
+                    "duration_ms": duration_ms
+                }
+            )
             return redirect(f"/utility/callback?error=callback_failed&description={result.error}")
+        
+        # Log successful callback
+        logger.info(
+            "UTILITY_OAUTH_CALLBACK_SUCCESS | connection=%s duration_ms=%.1f",
+            result.connection_id, duration_ms,
+            extra={
+                "event_type": "oauth_callback_success",
+                "connection_id": result.connection_id,
+                "duration_ms": duration_ms
+            }
+        )
         
         # Trigger async data sync if connected
         if result.connection_id:
             conn = UtilityConnection.query.get(result.connection_id)
             if conn and conn.connection_status == 'connected':
                 # Optionally trigger sync here or let frontend trigger it
-                pass
+                log_data_sync_event(conn.id, conn.provider_name, "oauth_complete", True)
         
         # Redirect to frontend success page
         return redirect(f"/utility/callback?success=true&connection_id={result.connection_id}")
@@ -350,25 +537,47 @@ def sync_utility_data(audit_id):
         if not connection:
             return jsonify({'error': 'No active utility connection for this audit'}), 404
         
+        # Log sync start
+        log_data_sync_event(connection.id, connection.provider_name, "sync_started")
+        
         # Get provider and sync
         provider = registry.get_provider(connection.provider_name)
         if not provider:
+            log_data_sync_event(connection.id, connection.provider_name, "sync_failed", False, error="provider_not_found")
             return jsonify({'error': f'Provider {connection.provider_name} not found'}), 500
         
         # Update status
         connection.connection_status = 'sync_in_progress'
         db.session.commit()
         
+        start_time = time.time()
         try:
             result = provider.sync_usage(connection.id)
+            duration_ms = (time.time() - start_time) * 1000
             
             if result.success:
                 connection.connection_status = 'connected'
                 connection.last_sync_at = datetime.utcnow()
                 connection.error_message = None
+                
+                # Log successful sync with record count
+                log_data_sync_event(
+                    connection.id, connection.provider_name, "sync_complete",
+                    True, records_count=result.records_imported
+                )
+                logger.info(
+                    "UTILITY_SYNC_COMPLETE | connection=%s provider=%s records=%s duration_ms=%.1f",
+                    connection.id, connection.provider_name, result.records_imported, duration_ms
+                )
             else:
                 connection.connection_status = 'connected'  # Keep connected, just note sync failure
                 connection.error_message = result.error
+                
+                # Log sync failure
+                log_data_sync_event(
+                    connection.id, connection.provider_name, "sync_failed",
+                    False, error=result.error
+                )
             
             db.session.commit()
             
@@ -384,6 +593,12 @@ def sync_utility_data(audit_id):
             connection.connection_status = 'connected'
             connection.error_message = str(sync_error)
             db.session.commit()
+            
+            # Log exception
+            log_data_sync_event(
+                connection.id, connection.provider_name, "sync_exception",
+                False, error=str(sync_error)
+            )
             raise
         
     except Exception as e:
