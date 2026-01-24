@@ -67,9 +67,13 @@ def webhook_secret():
 
 
 def generate_signature(secret: str, salt: str, body: bytes) -> str:
-    """Generate UtilityAPI-style signature."""
-    message = f"{secret}{salt}".encode() + body
-    return hashlib.sha256(message).hexdigest()
+    """Generate UtilityAPI-style signature.
+    
+    Format: SHA256("<secret>.<salt>.<body>")
+    """
+    body_str = body.decode('utf-8')
+    combined_string = f"{secret}.{salt}.{body_str}"
+    return hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
 
 
 class TestWebhookSignatureVerification:

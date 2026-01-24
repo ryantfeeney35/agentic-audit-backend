@@ -57,7 +57,10 @@ def verify_utilityapi_signature(raw_body: bytes, salt: str, signature: str) -> b
     """
     Verify UtilityAPI webhook signature.
     
-    UtilityAPI uses: SHA256("<webhook_secret><salt><raw_body>")
+    UtilityAPI uses: SHA256("<secret>.<salt>.<body>")
+    Note: Components are joined with periods (.)
+    
+    Reference: https://utilityapi.com/docs/webhooks#verifying-signatures
     
     Args:
         raw_body: Raw request body bytes
@@ -85,9 +88,11 @@ def verify_utilityapi_signature(raw_body: bytes, salt: str, signature: str) -> b
         )
         return False
     
-    # UtilityAPI signature: SHA256("<secret><salt><body>")
-    message = f"{webhook_secret}{salt}".encode() + raw_body
-    expected_signature = hashlib.sha256(message).hexdigest()
+    # UtilityAPI signature: SHA256("<secret>.<salt>.<body>")
+    # Components joined with periods, then UTF-8 encoded
+    body_str = raw_body.decode('utf-8')
+    combined_string = f"{webhook_secret}.{salt}.{body_str}"
+    expected_signature = hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
     
     # Log for debugging (without exposing secret)
     logger.debug(
