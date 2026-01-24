@@ -147,7 +147,6 @@ class UtilityAPIProvider(UtilityProvider):
                 user_id=user_id,
                 audit_id=audit_id,
                 provider_name=self.provider_name,
-                provider_type=self.provider_type.value,
                 utility_name=utility_name.upper(),
                 status=ConnectionStatus.PENDING_AUTHORIZATION.value,
                 data_scope=data_scope,
