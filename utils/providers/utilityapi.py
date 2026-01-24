@@ -631,6 +631,101 @@ class UtilityAPIProvider(UtilityProvider):
             logger.warning(f"Network error fetching UtilityAPI intervals: {e}")
             return {"success": True, "intervals": []}  # Non-fatal
     
+    def get_meters_for_authorization(self, authorization_uid: str) -> Dict[str, Any]:
+        """
+        Fetch meters associated with an authorization.
+        
+        Args:
+            authorization_uid: UtilityAPI authorization UID
+            
+        Returns:
+            Dict with meters list on success, error on failure
+        """
+        try:
+            # UtilityAPI uses query params: /meters?authorizations=123
+            response = requests.get(
+                f"{self.base_url}/meters",
+                headers=self._get_headers(),
+                params={"authorizations": authorization_uid},
+                timeout=self.timeout,
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"UtilityAPI meters fetch failed: {response.status_code}")
+                return {
+                    "success": False,
+                    "error": f"API error: {response.status_code}",
+                }
+            
+            data = response.json()
+            return {
+                "success": True,
+                "meters": data.get("meters", []),
+            }
+            
+        except requests.RequestException as e:
+            logger.exception(f"Network error fetching UtilityAPI meters: {e}")
+            return {"success": False, "error": f"Network error: {str(e)}"}
+    
+    def trigger_historical_collection(
+        self, 
+        meter_uids: list, 
+        collection_duration_months: int = 12
+    ) -> Dict[str, Any]:
+        """
+        Trigger historical data collection for meters.
+        
+        After authorization is complete, this must be called to actually
+        collect the historical billing and interval data.
+        
+        Args:
+            meter_uids: List of meter UIDs to collect data for
+            collection_duration_months: Number of months to collect (1-36, default 12)
+            
+        Returns:
+            Dict with success status and meters triggered
+        """
+        try:
+            response = requests.post(
+                f"{self.base_url}/meters/historical-collection",
+                headers=self._get_headers(),
+                json={
+                    "meters": meter_uids,
+                    "collection_duration": collection_duration_months,
+                },
+                timeout=self.timeout,
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(
+                    f"UtilityAPI historical collection triggered for meters: {data.get('meters')}"
+                )
+                return {
+                    "success": True,
+                    "meters": data.get("meters", []),
+                    "collection_duration": data.get("collection_duration"),
+                }
+            elif response.status_code == 402:
+                logger.warning("UtilityAPI historical collection failed: Payment required")
+                return {
+                    "success": False,
+                    "error": "Payment required - add balance to UtilityAPI account",
+                }
+            else:
+                error_msg = f"API error: {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", {}).get("message", error_msg)
+                except:
+                    pass
+                logger.error(f"UtilityAPI historical collection failed: {error_msg}")
+                return {"success": False, "error": error_msg}
+                
+        except requests.RequestException as e:
+            logger.exception(f"Network error triggering UtilityAPI historical collection: {e}")
+            return {"success": False, "error": f"Network error: {str(e)}"}
+    
     def _revoke_authorization(self, authorization_uid: str) -> bool:
         """
         Revoke an authorization via UtilityAPI.

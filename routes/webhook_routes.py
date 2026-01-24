@@ -162,6 +162,9 @@ UTILITYAPI_EVENT_TYPES = {
     'authorization_update_finished_failed': 'Authorization failed',
     'authorization_revoked': 'User revoked authorization',
     
+    # Meter lifecycle events
+    'meter_created': 'New meter discovered under authorization',
+    
     # Meter data events
     'meter_intervals_added': 'New interval (usage) data available',
     'meter_bills_added': 'New billing data available',
@@ -276,6 +279,16 @@ def utilityapi_webhook():
                     'type': 'authorization_update_finished_successful',
                     'authorization_uid': event.get('authorization_uid'),
                     'status': 'processed' if result else 'queued'
+                })
+            
+            elif event_type == 'meter_created':
+                # New meter discovered - store meter_uid and trigger historical collection
+                result = handle_meter_created(event)
+                processed_events.append({
+                    'type': 'meter_created',
+                    'meter_uid': event.get('meter_uid'),
+                    'authorization_uid': event.get('authorization_uid'),
+                    'status': 'processed' if result else 'acknowledged'
                 })
                 
             elif event_type in ['meter_intervals_added', 'meter_bills_added']:
@@ -441,9 +454,59 @@ def handle_authorization_complete(event: dict) -> bool:
                 connection.id, connection.audit_id, authorization_uid, connection.provider_metadata
             )
             
-            # Queue background data sync (don't block webhook response)
-            # For now, just mark as needing sync - a background job can pick this up
-            # In future: use Celery, RQ, or similar for async processing
+            # Trigger historical data collection for associated meters
+            # This is required to actually collect billing/interval data
+            try:
+                from utils.providers.utilityapi import UtilityAPIProvider
+                provider = UtilityAPIProvider()
+                
+                # First, get meters associated with this authorization
+                meters_response = provider.get_meters_for_authorization(str(authorization_uid))
+                
+                if meters_response.get("success") and meters_response.get("meters"):
+                    meter_uids = [str(m.get("uid")) for m in meters_response["meters"] if m.get("uid")]
+                    
+                    if meter_uids:
+                        # Store meter_uids in connection metadata
+                        metadata = dict(connection.provider_metadata or {})
+                        metadata['meter_uids'] = meter_uids
+                        connection.provider_metadata = metadata
+                        flag_modified(connection, 'provider_metadata')
+                        db.session.commit()
+                        
+                        # Trigger historical collection (12 months by default)
+                        collection_result = provider.trigger_historical_collection(
+                            meter_uids=meter_uids,
+                            collection_duration_months=12
+                        )
+                        
+                        if collection_result.get("success"):
+                            logger.info(
+                                "WEBHOOK_HISTORICAL_COLLECTION_TRIGGERED | connection_id=%s meters=%s",
+                                connection.id, collection_result.get("meters")
+                            )
+                        else:
+                            logger.warning(
+                                "WEBHOOK_HISTORICAL_COLLECTION_FAILED | connection_id=%s error=%s",
+                                connection.id, collection_result.get("error")
+                            )
+                    else:
+                        logger.warning(
+                            "WEBHOOK_NO_METER_UIDS | connection_id=%s authorization_uid=%s",
+                            connection.id, authorization_uid
+                        )
+                else:
+                    logger.warning(
+                        "WEBHOOK_METERS_FETCH_FAILED | connection_id=%s error=%s",
+                        connection.id, meters_response.get("error")
+                    )
+            except Exception as e:
+                # Log but don't fail - user can manually trigger sync later
+                logger.warning(
+                    "WEBHOOK_HISTORICAL_COLLECTION_ERROR | connection_id=%s error=%s",
+                    connection.id, str(e)
+                )
+                
         elif connection.status == 'connected':
             # Already connected - this is a duplicate webhook, just acknowledge
             logger.info(
@@ -455,6 +518,97 @@ def handle_authorization_complete(event: dict) -> bool:
         
     except Exception as e:
         logger.error("Error handling authorization complete: %s", str(e))
+        return False
+
+
+def handle_meter_created(event: dict) -> bool:
+    """
+    Handle meter_created event.
+    
+    This is called when a new meter is discovered under an authorization.
+    Stores the meter_uid and triggers historical collection if not already done.
+    
+    Args:
+        event: Webhook event payload
+        
+    Returns:
+        True if processed successfully, False otherwise
+    """
+    meter_uid = event.get('meter_uid')
+    authorization_uid = event.get('authorization_uid')
+    
+    if not meter_uid or not authorization_uid:
+        logger.warning("meter_created event missing meter_uid or authorization_uid")
+        return False
+    
+    try:
+        from models import UtilityConnection, db
+        from sqlalchemy.orm.attributes import flag_modified
+        
+        # Find the connection by authorization_uid
+        connection = UtilityConnection.query.filter(
+            UtilityConnection.provider_name == 'utilityapi',
+            UtilityConnection.provider_metadata['authorization_uid'].astext == str(authorization_uid)
+        ).first()
+        
+        if not connection:
+            logger.warning(
+                "No connection found for meter_created: authorization_uid=%s",
+                authorization_uid
+            )
+            return False
+        
+        # Add meter_uid to connection metadata
+        metadata = dict(connection.provider_metadata or {})
+        existing_meters = metadata.get('meter_uids', [])
+        
+        if str(meter_uid) not in existing_meters:
+            existing_meters.append(str(meter_uid))
+            metadata['meter_uids'] = existing_meters
+            connection.provider_metadata = metadata
+            flag_modified(connection, 'provider_metadata')
+            db.session.commit()
+            
+            logger.info(
+                "WEBHOOK_METER_ADDED | connection_id=%s meter_uid=%s total_meters=%d",
+                connection.id, meter_uid, len(existing_meters)
+            )
+            
+            # Trigger historical collection for this meter
+            try:
+                from utils.providers.utilityapi import UtilityAPIProvider
+                provider = UtilityAPIProvider()
+                
+                collection_result = provider.trigger_historical_collection(
+                    meter_uids=[str(meter_uid)],
+                    collection_duration_months=12
+                )
+                
+                if collection_result.get("success"):
+                    logger.info(
+                        "WEBHOOK_METER_HISTORICAL_COLLECTION_TRIGGERED | connection_id=%s meter_uid=%s",
+                        connection.id, meter_uid
+                    )
+                else:
+                    logger.warning(
+                        "WEBHOOK_METER_HISTORICAL_COLLECTION_FAILED | connection_id=%s meter_uid=%s error=%s",
+                        connection.id, meter_uid, collection_result.get("error")
+                    )
+            except Exception as e:
+                logger.warning(
+                    "WEBHOOK_METER_HISTORICAL_COLLECTION_ERROR | connection_id=%s meter_uid=%s error=%s",
+                    connection.id, meter_uid, str(e)
+                )
+        else:
+            logger.info(
+                "WEBHOOK_METER_ALREADY_EXISTS | connection_id=%s meter_uid=%s",
+                connection.id, meter_uid
+            )
+        
+        return True
+        
+    except Exception as e:
+        logger.error("Error handling meter_created: %s", str(e))
         return False
 
 
