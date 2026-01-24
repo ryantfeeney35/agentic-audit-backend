@@ -8,13 +8,16 @@ data synchronization, and usage summary retrieval.
 from flask import Blueprint, request, jsonify, g, redirect, url_for
 from auth import require_auth
 from models import db, UtilityConnection, UtilityUsageData, UtilityUsageSummary, Audit
-from utils.providers.registry import registry
+from utils.providers.registry import get_registry
 from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
 utility_bp = Blueprint('utility', __name__, url_prefix='/api/utility')
+
+# Get the provider registry instance
+registry = get_registry()
 
 
 @utility_bp.route('/providers', methods=['GET'])

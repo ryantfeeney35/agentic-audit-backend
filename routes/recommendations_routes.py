@@ -218,6 +218,10 @@ def serialize_rec(r):
         "service_id": getattr(r, "service_id", None),
         "order_of_completion": getattr(r, "order_of_completion", None),
         "rebate_eligible": getattr(r, "rebate_eligible", None),
+        # Energy Usage Agent fields
+        "recommendation_type": getattr(r, "recommendation_type", None) or "upgrade",
+        "user_status": getattr(r, "user_status", None),
+        "user_status_updated_at": (r.user_status_updated_at.isoformat() if getattr(r, 'user_status_updated_at', None) else None),
     }
 
 
@@ -407,4 +411,37 @@ def patch_recommendation_roi_inputs(audit_id, rec_id):
         # Non-fatal if compute fails
         db.session.rollback()
 
+    return jsonify(serialize_rec(rec))
+
+
+@bp.route("/audits/<int:audit_id>/recommendations/<int:rec_id>/status", methods=["PATCH"])
+def update_recommendation_status(audit_id, rec_id):
+    """Update user status for a recommendation (interested, not_relevant, completed, or null to clear).
+    
+    Request body: { "user_status": "interested" | "not_relevant" | "completed" | null }
+    Returns: Updated recommendation object
+    """
+    from datetime import datetime
+    
+    rec = AuditRecommendation.query.filter_by(id=rec_id, audit_id=audit_id).first()
+    if not rec:
+        abort(404, description="Recommendation not found for this audit")
+    
+    body = request.json or {}
+    new_status = body.get("user_status")
+    
+    # Validate status value
+    valid_statuses = ["interested", "not_relevant", "completed", None]
+    if new_status not in valid_statuses:
+        abort(400, description=f"Invalid user_status. Must be one of: {valid_statuses}")
+    
+    try:
+        rec.user_status = new_status
+        rec.user_status_updated_at = datetime.utcnow() if new_status else None
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update user_status for rec %s: %s", rec_id, e)
+        abort(500, description=f"Failed to update status: {e}")
+    
     return jsonify(serialize_rec(rec))

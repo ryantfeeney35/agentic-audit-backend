@@ -153,6 +153,14 @@ class AuditRecommendation(db.Model):
     order_of_completion = db.Column(db.Integer, nullable=True)
     # Whether this service qualifies for rebates (from catalog)
     rebate_eligible = db.Column(db.Boolean, nullable=True)
+    
+    # Energy Usage Agent fields
+    # Recommendation type: 'upgrade' (default) or 'behavior' (usage change, no cost)
+    recommendation_type = db.Column(db.String(20), nullable=False, server_default=sa.text("'upgrade'"))
+    # User status: 'interested', 'not_relevant', 'completed', or null (no action taken)
+    user_status = db.Column(db.String(20), nullable=True)
+    # When user_status was last updated
+    user_status_updated_at = db.Column(db.DateTime, nullable=True)
 
     audit = relationship("Audit", back_populates="recommendations")
     # relationship to the suggested media (may be None)
