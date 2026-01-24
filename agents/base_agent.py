@@ -35,6 +35,9 @@ MEDIA_SCHEMAS = {
     "interview": InterviewSchema,
     "interior": InteriorRoomSchema,
     "roof": RoofMediaSchema,
+    # energy_usage uses EnergyUsageAgentOutput via dedicated analyze function
+    # but we map it here for potential future media processing
+    "energy_usage": None,  # Uses custom schema via energy_usage.py
 }
 
 

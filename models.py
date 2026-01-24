@@ -167,3 +167,186 @@ class Contractor(db.Model):
     contact = db.Column(db.String(120), nullable=False)  # phone, email, etc.
     step_type = db.Column(db.String(50), nullable=False)  # e.g., insulation, hvac, exterior
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Utility Connection & Usage Models (Green Button / Energy Agent)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class UtilityConnection(db.Model):
+    """
+    Tracks a utility data connection for an audit.
+    
+    Supports multiple providers: SDG&E CMD (direct), UtilityAPI (aggregator),
+    and manual entry. OAuth tokens are encrypted at rest.
+    """
+    __tablename__ = "utility_connections"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    
+    # Provider identification
+    utility_name = db.Column(db.String(50), nullable=False)  # e.g., 'SDGE', 'PGE', 'SCE'
+    provider_name = db.Column(db.String(50), nullable=False)  # 'sdge_cmd', 'utilityapi', 'manual'
+    data_scope = db.Column(db.String(20), default='electric')  # 'electric', 'gas', 'both'
+    
+    # Connection status
+    status = db.Column(db.String(30), default='not_connected')
+    # Possible values: 'not_connected', 'pending_authorization', 'connected', 
+    #                  'sync_in_progress', 'failed', 'revoked'
+    
+    # OAuth tokens (encrypted)
+    access_token_enc = db.Column(db.Text, nullable=True)
+    refresh_token_enc = db.Column(db.Text, nullable=True)
+    token_expires_at = db.Column(db.DateTime, nullable=True)
+    
+    # Provider-specific data (e.g., UtilityAPI authorization_id, SDGE subscription_id)
+    provider_metadata = db.Column(JSONB, default=dict)
+    
+    # OAuth state for security validation
+    oauth_state = db.Column(db.String(255), nullable=True)
+    
+    # Sync timestamps
+    last_sync_at = db.Column(db.DateTime, nullable=True)
+    last_sync_error = db.Column(db.Text, nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    audit = relationship("Audit", backref="utility_connections")
+    usage_data = relationship("UtilityUsageData", back_populates="connection", cascade="all, delete-orphan")
+    usage_summary = relationship("UtilityUsageSummary", back_populates="connection", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def access_token(self):
+        """Decrypt and return access token."""
+        if not self.access_token_enc:
+            return None
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.access_token_enc)
+    
+    @access_token.setter
+    def access_token(self, value):
+        """Encrypt and store access token."""
+        if value is None:
+            self.access_token_enc = None
+        else:
+            from utils.encryption import encrypt_token
+            self.access_token_enc = encrypt_token(value)
+    
+    @property
+    def refresh_token(self):
+        """Decrypt and return refresh token."""
+        if not self.refresh_token_enc:
+            return None
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.refresh_token_enc)
+    
+    @refresh_token.setter
+    def refresh_token(self, value):
+        """Encrypt and store refresh token."""
+        if value is None:
+            self.refresh_token_enc = None
+        else:
+            from utils.encryption import encrypt_token
+            self.refresh_token_enc = encrypt_token(value)
+
+
+class UtilityUsageData(db.Model):
+    """
+    Raw utility usage data (monthly intervals).
+    
+    Stores individual billing period records from Green Button data
+    or manual entry. Used to compute normalized summaries.
+    """
+    __tablename__ = "utility_usage_data"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    connection_id = db.Column(db.Integer, db.ForeignKey("utility_connections.id", ondelete="CASCADE"), nullable=False)
+    
+    # Billing period
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    
+    # Usage data
+    usage_amount = db.Column(db.Float, nullable=False)  # kWh for electric, therms for gas
+    unit = db.Column(db.String(20), default='kWh')  # 'kWh' or 'therms'
+    cost_usd = db.Column(db.Float, nullable=True)  # Optional cost
+    
+    # Data source
+    source = db.Column(db.String(30), default='api')  # 'api', 'manual', 'xml_import'
+    
+    # Raw data preservation (ESPI XML or API response excerpt)
+    raw_data = db.Column(JSONB, nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationships
+    connection = relationship("UtilityConnection", back_populates="usage_data")
+    audit = relationship("Audit", backref="utility_usage_records")
+
+
+class UtilityUsageSummary(db.Model):
+    """
+    Normalized utility usage summary for agent consumption.
+    
+    Aggregates raw usage data into annualized metrics with seasonal
+    patterns. This is the primary interface for the Energy Usage Agent.
+    """
+    __tablename__ = "utility_usage_summaries"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    connection_id = db.Column(db.Integer, db.ForeignKey("utility_connections.id", ondelete="CASCADE"), nullable=False, unique=True)
+    
+    # Summary data
+    fuel_type = db.Column(db.String(20), default='electric')  # 'electric', 'gas'
+    start_date = db.Column(db.Date, nullable=True)
+    end_date = db.Column(db.Date, nullable=True)
+    
+    # Annualized metrics
+    annual_usage = db.Column(db.Float, nullable=True)  # kWh or therms
+    annual_cost_usd = db.Column(db.Float, nullable=True)
+    unit = db.Column(db.String(20), default='kWh')
+    
+    # Detailed breakdowns (JSONB)
+    monthly_breakdown = db.Column(JSONB, default=list)  # [{month, usage, cost_usd, unit}, ...]
+    seasonal_pattern = db.Column(JSONB, nullable=True)  # {winter, spring, summer, fall}
+    tou_data = db.Column(JSONB, nullable=True)  # Time-of-use data if available
+    
+    # Data quality indicators
+    data_quality_flags = db.Column(JSONB, default=list)  # ['partial_data_6_months', 'data_gaps_detected', ...]
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    connection = relationship("UtilityConnection", back_populates="usage_summary")
+    audit = relationship("Audit", backref="utility_usage_summary")
+
+    def to_dict(self):
+        """Convert to dictionary for API responses and agent context."""
+        return {
+            "id": self.id,
+            "audit_id": self.audit_id,
+            "connection_id": self.connection_id,
+            "fuel_type": self.fuel_type,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "annual_usage": self.annual_usage,
+            "annual_usage_display": f"{self.annual_usage:,.0f} {self.unit}" if self.annual_usage else None,
+            "annual_cost_usd": self.annual_cost_usd,
+            "unit": self.unit,
+            "monthly_breakdown": self.monthly_breakdown,
+            "seasonal_pattern": self.seasonal_pattern,
+            "tou_data": self.tou_data,
+            "data_quality_flags": self.data_quality_flags,
+        }

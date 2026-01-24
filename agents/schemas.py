@@ -8,6 +8,7 @@ class StepType(str, Enum):
     INTERIOR = "Interior"
     HVAC = "HVAC"
     INSULATION = "Insulation"
+    ENERGY_USAGE = "Energy Usage"
 
 # -------------------------
 # Shared structures
@@ -222,3 +223,188 @@ class BootstrapOutput(BaseModel):
     followup_questions: List[str] = Field(default_factory=list)
     # Keep recommendations field for shape compatibility, but it's not required in bootstrap.
     recommendations: List[Recommendation] = Field(default_factory=list)
+
+
+# -------------------------
+# Energy Usage Agent Schemas
+# -------------------------
+class EnergyUsageFindingCategory(str, Enum):
+    BASELINE = "baseline"          # Overall usage vs typical homes
+    SEASONAL = "seasonal"          # Seasonal patterns
+    TOU = "tou"                    # Time-of-use opportunities
+    ANOMALY = "anomaly"            # Unusual spikes or patterns
+    CORRELATION = "correlation"    # Usage correlated with equipment/behavior
+
+
+class EnergyUsageFinding(BaseModel):
+    """A specific finding from energy usage analysis."""
+    category: EnergyUsageFindingCategory = Field(
+        ...,
+        description="Category of finding (baseline, seasonal, tou, anomaly, correlation)",
+    )
+    description: str = Field(
+        ...,
+        description="Plain language description of the finding",
+    )
+    evidence: str = Field(
+        ...,
+        description="Specific data points or observations supporting this finding",
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in this finding based on data quality/completeness",
+    )
+
+
+class RecommendationType(str, Enum):
+    UPGRADE = "upgrade"            # Equipment/envelope upgrades
+    BEHAVIOR = "behavior"          # Usage pattern changes
+
+
+class EnergyUsageRecommendation(BaseModel):
+    """A recommendation from energy usage analysis."""
+    step_type: StepType = Field(
+        ...,
+        description="Category for the recommendation (HVAC, Insulation, Energy Usage for behavior changes)",
+    )
+    recommendation_type: RecommendationType = Field(
+        default=RecommendationType.UPGRADE,
+        description="Whether this is an upgrade or behavior change recommendation",
+    )
+    summary: str = Field(
+        ...,
+        description="Concise recommendation summary",
+    )
+    rationale: str = Field(
+        ...,
+        description="Evidence-based justification referencing specific usage data",
+    )
+    estimated_impact: Optional[str] = Field(
+        default=None,
+        description="Qualitative impact estimate (e.g., 'Could reduce summer peak by 15-20%')",
+    )
+    priority: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Priority level 1-5 (1=highest)",
+    )
+    # Note: annual_savings_usd, upgrade_cost_usd, payback_years handled by ROI system
+
+
+class OccupancyInfo(BaseModel):
+    """Information about home occupancy patterns."""
+    occupant_count: Optional[int] = Field(default=None, description="Number of occupants")
+    daytime_occupied: Optional[bool] = Field(default=None, description="Is someone home during weekdays?")
+    work_from_home: Optional[bool] = Field(default=None, description="Do occupants work from home?")
+    typical_schedule: Optional[str] = Field(default=None, description="Brief schedule description")
+
+
+class ApplianceItem(BaseModel):
+    """An appliance observed or reported in the home."""
+    name: str = Field(..., description="Appliance name (e.g., 'Pool Pump', 'Electric Water Heater')")
+    location: Optional[str] = Field(default=None, description="Location in home")
+    estimated_age_years: Optional[int] = Field(default=None, description="Estimated age in years")
+    condition: Optional[str] = Field(default=None, description="Observed condition")
+    usage_pattern: Optional[str] = Field(default=None, description="How frequently used")
+
+
+class SolarInfo(BaseModel):
+    """Information about existing solar installation."""
+    has_solar: bool = Field(default=False, description="Whether solar panels are present")
+    system_size_kw: Optional[float] = Field(default=None, description="System size in kW")
+    annual_production_kwh: Optional[float] = Field(default=None, description="Estimated annual production")
+    has_battery: Optional[bool] = Field(default=None, description="Whether battery storage is present")
+
+
+class UtilityUsageSummarySchema(BaseModel):
+    """Schema for utility usage data passed to Energy Usage Agent."""
+    fuel_type: str = Field(..., description="electric, gas, or both")
+    start_date: Optional[str] = Field(default=None, description="Start of data range (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(default=None, description="End of data range (YYYY-MM-DD)")
+    annual_usage_kwh: Optional[float] = Field(default=None, description="Total annual usage in kWh")
+    annual_cost_usd: Optional[float] = Field(default=None, description="Total annual cost in USD")
+    monthly_breakdown: Optional[List[dict]] = Field(
+        default=None,
+        description="Monthly usage data: [{month, usage_kwh, cost_usd}, ...]",
+    )
+    seasonal_pattern: Optional[dict] = Field(
+        default=None,
+        description="Seasonal averages: {summer_avg, winter_avg, shoulder_avg}",
+    )
+    tou_data: Optional[dict] = Field(
+        default=None,
+        description="Time-of-use breakdown: {on_peak_pct, off_peak_pct, super_off_peak_pct}",
+    )
+    data_quality_flags: Optional[List[str]] = Field(
+        default=None,
+        description="Data quality issues: missing months, estimated reads, etc.",
+    )
+
+
+class EnergyUsageAnalysisInput(BaseModel):
+    """Input context for Energy Usage Agent analysis."""
+    utility_summary: UtilityUsageSummarySchema = Field(
+        ...,
+        description="Normalized utility usage data",
+    )
+    appliance_inventory: List[ApplianceItem] = Field(
+        default_factory=list,
+        description="Known appliances in the home",
+    )
+    hvac_summary: Optional[dict] = Field(
+        default=None,
+        description="HVAC system summary from HVAC agent",
+    )
+    solar_info: Optional[SolarInfo] = Field(
+        default=None,
+        description="Existing solar installation info",
+    )
+    occupancy_info: Optional[OccupancyInfo] = Field(
+        default=None,
+        description="Occupancy patterns",
+    )
+    comfort_issues: List[str] = Field(
+        default_factory=list,
+        description="Reported comfort issues from interview",
+    )
+    climate_zone: Optional[str] = Field(
+        default=None,
+        description="Climate zone if known",
+    )
+    home_sqft: Optional[int] = Field(
+        default=None,
+        description="Home square footage if known",
+    )
+
+
+class EnergyUsageAgentOutput(BaseModel):
+    """Output from Energy Usage Agent analysis."""
+    findings: List[EnergyUsageFinding] = Field(
+        default_factory=list,
+        description="Evidence-based findings about usage patterns",
+    )
+    recommendations: List[EnergyUsageRecommendation] = Field(
+        default_factory=list,
+        description="Recommendations grounded in usage data evidence",
+    )
+    assumptions: List[str] = Field(
+        default_factory=list,
+        description="Any assumptions made and their basis",
+    )
+    followup_questions: List[str] = Field(
+        default_factory=list,
+        description="Questions that would improve analysis if answered",
+    )
+    overall_confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Overall confidence in analysis based on data completeness",
+    )
+    summary: str = Field(
+        ...,
+        description="Executive summary of energy usage analysis",
+    )
