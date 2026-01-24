@@ -569,9 +569,11 @@ class UtilityAPIProvider(UtilityProvider):
             Dict with bills list on success, error on failure
         """
         try:
+            # UtilityAPI uses query params: /bills?authorizations=123
             response = requests.get(
-                f"{self.base_url}/authorizations/{authorization_uid}/bills",
+                f"{self.base_url}/bills",
                 headers=self._get_headers(),
+                params={"authorizations": authorization_uid},
                 timeout=self.timeout,
             )
             
@@ -603,9 +605,11 @@ class UtilityAPIProvider(UtilityProvider):
             Dict with intervals list on success, error on failure
         """
         try:
+            # UtilityAPI uses query params: /intervals?authorizations=123
             response = requests.get(
-                f"{self.base_url}/authorizations/{authorization_uid}/intervals",
+                f"{self.base_url}/intervals",
                 headers=self._get_headers(),
+                params={"authorizations": authorization_uid},
                 timeout=self.timeout,
             )
             
