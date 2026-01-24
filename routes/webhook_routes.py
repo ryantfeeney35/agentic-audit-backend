@@ -423,16 +423,22 @@ def handle_authorization_complete(event: dict) -> bool:
         if connection.status == 'pending_authorization':
             connection.status = 'connected'
             # Store authorization_uid in provider_metadata
-            metadata = connection.provider_metadata or {}
+            # Note: Must create new dict to trigger SQLAlchemy change detection for JSONB
+            metadata = dict(connection.provider_metadata or {})
             metadata['authorization_uid'] = str(authorization_uid)
             connection.provider_metadata = metadata
             connection.updated_at = datetime.utcnow()
             connection.last_sync_error = None
+            
+            # Force SQLAlchemy to detect the JSONB change
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(connection, 'provider_metadata')
+            
             db.session.commit()
             
             logger.info(
-                "WEBHOOK_AUTH_COMPLETE | connection_id=%s audit_id=%s authorization_uid=%s",
-                connection.id, connection.audit_id, authorization_uid
+                "WEBHOOK_AUTH_COMPLETE | connection_id=%s audit_id=%s authorization_uid=%s metadata=%s",
+                connection.id, connection.audit_id, authorization_uid, connection.provider_metadata
             )
             
             # Queue background data sync (don't block webhook response)
