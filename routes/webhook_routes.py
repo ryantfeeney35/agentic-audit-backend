@@ -292,12 +292,21 @@ def utilityapi_webhook():
                 })
                 
             elif event_type in ['meter_intervals_added', 'meter_bills_added']:
-                # New data available - queue sync
+                # New data available - trigger sync
                 result = handle_data_available(event, event_type)
                 processed_events.append({
                     'type': event_type,
                     'meter_uid': event.get('meter_uid'),
-                    'status': 'processed' if result else 'queued'
+                    'status': 'processed' if result else 'failed'
+                })
+            
+            elif event_type == 'meter_historical_collection_finished_successful':
+                # Historical collection complete - trigger final sync
+                result = handle_data_available(event, event_type)
+                processed_events.append({
+                    'type': event_type,
+                    'meter_uid': event.get('meter_uid'),
+                    'status': 'processed' if result else 'failed'
                 })
                 
             elif event_type == 'authorization_revoked':
@@ -617,7 +626,7 @@ def handle_data_available(event: dict, event_type: str) -> bool:
     Handle meter_intervals_added or meter_bills_added events.
     
     This is called when new utility data is available for download.
-    Queues a data sync for the relevant connection.
+    Triggers a data sync to fetch and store the data.
     
     Args:
         event: Webhook event payload
@@ -664,19 +673,41 @@ def handle_data_available(event: dict, event_type: str) -> bool:
             )
             return False
         
-        # Mark connection as needing sync (idempotent)
-        # A background job will pick this up and perform the actual sync
-        # For now, log that sync is needed
         logger.info(
             "WEBHOOK_DATA_AVAILABLE | connection_id=%s audit_id=%s event=%s meter_uid=%s",
             connection.id, connection.audit_id, event_type, meter_uid
         )
         
-        # In a production system, you would:
-        # 1. Queue a background job: queue.enqueue(sync_utility_data, connection.id)
-        # 2. Or set a flag: connection.sync_needed = True
-        
-        return True
+        # Trigger actual data sync to fetch and store the data
+        try:
+            from utils.providers.utilityapi import UtilityAPIProvider
+            provider = UtilityAPIProvider()
+            
+            # Sync usage data from UtilityAPI
+            sync_result = provider.sync_usage(connection.id)
+            
+            if sync_result.success:
+                logger.info(
+                    "WEBHOOK_DATA_SYNC_SUCCESS | connection_id=%s audit_id=%s records=%d date_range=%s-%s",
+                    connection.id, connection.audit_id, 
+                    sync_result.records_imported or 0,
+                    sync_result.date_range_start or 'N/A',
+                    sync_result.date_range_end or 'N/A'
+                )
+                return True
+            else:
+                logger.warning(
+                    "WEBHOOK_DATA_SYNC_FAILED | connection_id=%s audit_id=%s error=%s",
+                    connection.id, connection.audit_id, sync_result.error
+                )
+                return False
+                
+        except Exception as e:
+            logger.error(
+                "WEBHOOK_DATA_SYNC_ERROR | connection_id=%s audit_id=%s error=%s",
+                connection.id, connection.audit_id, str(e)
+            )
+            return False
         
     except Exception as e:
         logger.error("Error handling data available: %s", str(e))
