@@ -667,23 +667,33 @@ class UtilityAPIProvider(UtilityProvider):
         """
         Map common utility names to UtilityAPI utility codes.
         
+        UtilityAPI uses specific utility codes that are case-sensitive.
+        See: https://utilityapi.com/docs/utilities
+        
         Args:
             utility_name: Common utility name
             
         Returns:
             UtilityAPI utility code
         """
-        # UtilityAPI uses specific codes; these may need updating
+        # UtilityAPI utility codes (case-sensitive!)
+        # Our app uses simplified names, UtilityAPI uses codes with special chars
         mapping = {
-            "SDGE": "SDGE",
-            "SDG&E": "SDGE",
-            "PGE": "PGE",
-            "PG&E": "PGE",
-            "SCE": "SCE",
-            "LADWP": "LADWP",
-            "SMUD": "SMUD",
+            "SDGE": "SDG&E",      # San Diego Gas and Electric
+            "SDG&E": "SDG&E",
+            "PGE": "PG&E",        # Pacific Gas and Electric
+            "PG&E": "PG&E",
+            "SCE": "SCE",         # Southern California Edison
+            "SOCALGAS": "SoCalGas", # Southern California Gas
+            "SOCAL_GAS": "SoCalGas",
+            "LADWP": "LADWP",     # Los Angeles DWP (not currently supported by UtilityAPI)
+            "SMUD": "SMUD",       # Sacramento Municipal Utility District (not in list)
+            "DEMO": "DEMO",       # UtilityAPI demo/test utility
         }
-        return mapping.get(utility_name.upper(), utility_name.upper())
+        
+        result = mapping.get(utility_name.upper(), utility_name)
+        logger.debug(f"Mapped utility name '{utility_name}' to UtilityAPI code '{result}'")
+        return result
     
     def verify_webhook_signature(self, payload: bytes, signature: str) -> bool:
         """
