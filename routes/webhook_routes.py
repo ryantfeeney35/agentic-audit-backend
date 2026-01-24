@@ -19,7 +19,7 @@ import hmac
 import hashlib
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +31,25 @@ webhook_bp = Blueprint('webhooks', __name__, url_prefix='/webhooks')
 # ============================================================================
 
 def get_utilityapi_config():
-    """Get UtilityAPI webhook configuration from environment."""
+    """Get UtilityAPI webhook configuration from environment.
+    
+    Uses Flask's current_app.config first if available, falls back to os.getenv.
+    """
+    # Try to get from Flask config first (set during app initialization)
+    webhook_secret = None
+    try:
+        webhook_secret = current_app.config.get('UTILITYAPI_WEBHOOK_SECRET')
+    except RuntimeError:
+        # Outside of application context
+        pass
+    
+    # Fall back to environment variable
+    if not webhook_secret:
+        webhook_secret = os.getenv('UTILITYAPI_WEBHOOK_SECRET')
+    
     return {
         'base_url': os.getenv('UTILITYAPI_BASE_URL', 'https://utilityapi.com/api/v2'),
-        'webhook_secret': os.getenv('UTILITYAPI_WEBHOOK_SECRET'),
+        'webhook_secret': webhook_secret,
     }
 
 
@@ -73,6 +88,12 @@ def verify_utilityapi_signature(raw_body: bytes, salt: str, signature: str) -> b
     # UtilityAPI signature: SHA256("<secret><salt><body>")
     message = f"{webhook_secret}{salt}".encode() + raw_body
     expected_signature = hashlib.sha256(message).hexdigest()
+    
+    # Log for debugging (without exposing secret)
+    logger.debug(
+        "WEBHOOK_SIGNATURE_CHECK | provider=utilityapi salt_len=%d sig_len=%d body_len=%d",
+        len(salt), len(signature), len(raw_body)
+    )
     
     return hmac.compare_digest(expected_signature.lower(), signature.lower())
 
