@@ -591,27 +591,36 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
             'service_address': base.get('service_address'),
         })
     
-    # Parse intervals - UtilityAPI intervals have readings in 'readings' block
+    # Parse intervals - UtilityAPI intervals have 'readings' as a top-level list
+    # See: https://utilityapi.com/docs/api/intervals
+    # Structure: { uid, meter_uid, blocks: ["base", "readings"], readings: [{start, end, kwh, ...}, ...] }
     intervals = response_data.get('intervals', [])
     
     for interval_obj in intervals:
-        # Each interval object contains a 'readings' block with actual readings
-        readings_block = interval_obj.get('readings', {})
-        readings = readings_block.get('readings', [])
+        # 'readings' is a top-level list in the interval object
+        readings = interval_obj.get('readings', [])
+        
+        # Handle case where readings might not be a list
+        if not isinstance(readings, list):
+            logger.warning(f"Interval readings is not a list: {type(readings)}")
+            continue
         
         for reading in readings:
+            if not isinstance(reading, dict):
+                continue
+                
             start = reading.get('start')
             end = reading.get('end')
-            value = reading.get('value')  # Usually in Wh, need to convert to kWh
+            # UtilityAPI provides 'kwh' field directly in readings
+            value = reading.get('kwh') or reading.get('value')
             
             if not start or value is None:
                 continue
             
-            # Convert Wh to kWh if needed
-            reading_value = float(value)
-            # UtilityAPI typically provides values in Wh, convert to kWh
-            if reading_value > 1000:  # Likely in Wh
-                reading_value = reading_value / 1000
+            try:
+                reading_value = float(value)
+            except (ValueError, TypeError):
+                continue
             
             result['intervals'].append({
                 'start': start,
