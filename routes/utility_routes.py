@@ -13,7 +13,7 @@ Includes structured logging/analytics for:
 
 from flask import Blueprint, request, jsonify, g, redirect, url_for
 from auth import require_auth
-from models import db, UtilityConnection, UtilityUsageData, UtilityUsageSummary, Audit
+from models import db, UtilityConnection, UtilityUsageData, UtilityUsageSummary, UtilityIntervalData, Audit
 from utils.providers.registry import get_registry
 from datetime import datetime
 import logging
@@ -775,7 +775,7 @@ def get_utility_summary(audit_id):
         # Get stored summary
         summary = UtilityUsageSummary.query.filter_by(
             audit_id=audit_id,
-            utility_connection_id=connection.id
+            connection_id=connection.id
         ).order_by(UtilityUsageSummary.created_at.desc()).first()
         
         summary_data = None
@@ -784,7 +784,7 @@ def get_utility_summary(audit_id):
                 'fuel_type': summary.fuel_type,
                 'start_date': summary.start_date.isoformat() if summary.start_date else None,
                 'end_date': summary.end_date.isoformat() if summary.end_date else None,
-                'annual_usage_kwh': summary.annual_usage_kwh,
+                'annual_usage_kwh': summary.annual_usage,
                 'annual_cost_usd': summary.annual_cost_usd,
                 'monthly_breakdown': summary.monthly_breakdown,
                 'seasonal_pattern': summary.seasonal_pattern,
@@ -880,9 +880,14 @@ def submit_manual_utility_data(audit_id):
         raw_record = UtilityUsageData(
             user_id=user_id,
             audit_id=audit_id,
-            utility_connection_id=connection.id,
+            connection_id=connection.id,
+            period_start=datetime.strptime(monthly_data[0]['month'] + '-01', '%Y-%m-%d').date() if monthly_data else datetime.utcnow().date(),
+            period_end=datetime.strptime(monthly_data[-1]['month'] + '-28', '%Y-%m-%d').date() if monthly_data else datetime.utcnow().date(),
+            usage_amount=sum(item.get('usage_kwh', 0) for item in monthly_data),
+            unit='kWh',
+            cost_usd=sum(item.get('cost_usd', 0) for item in monthly_data) or None,
+            source='manual',
             raw_data={'monthly_data': monthly_data, 'source': 'manual_entry'},
-            data_format='manual_entry'
         )
         db.session.add(raw_record)
         
@@ -892,10 +897,12 @@ def submit_manual_utility_data(audit_id):
             'intervals': [],
             'billing_periods': [
                 {
-                    'start': f"{item['month']}-01",
-                    'end': f"{item['month']}-28",  # Approximate
+                    'start_date': f"{item['month']}-01",
+                    'end_date': f"{item['month']}-28",  # Approximate
                     'usage': item.get('usage_kwh', 0),
-                    'cost': item.get('cost_usd', 0)
+                    'cost_usd': item.get('cost_usd', 0),
+                    'month': item['month'],
+                    'unit': 'kWh',
                 }
                 for item in monthly_data
             ]
@@ -906,7 +913,7 @@ def submit_manual_utility_data(audit_id):
         # Store or update summary
         existing_summary = UtilityUsageSummary.query.filter_by(
             audit_id=audit_id,
-            utility_connection_id=connection.id
+            connection_id=connection.id
         ).first()
         
         if existing_summary:
@@ -915,15 +922,15 @@ def submit_manual_utility_data(audit_id):
             summary = UtilityUsageSummary(
                 user_id=user_id,
                 audit_id=audit_id,
-                utility_connection_id=connection.id
+                connection_id=connection.id
             )
             db.session.add(summary)
         
         summary.fuel_type = data_scope
-        summary.start_date = summary_data.get('start_date')
-        summary.end_date = summary_data.get('end_date')
-        summary.annual_usage_kwh = summary_data.get('annual_usage')
-        summary.annual_cost_usd = summary_data.get('annual_cost')
+        summary.start_date = datetime.strptime(summary_data['start_date'], '%Y-%m-%d').date() if summary_data.get('start_date') else None
+        summary.end_date = datetime.strptime(summary_data['end_date'], '%Y-%m-%d').date() if summary_data.get('end_date') else None
+        summary.annual_usage = summary_data.get('annual_usage')
+        summary.annual_cost_usd = summary_data.get('annual_cost_usd')
         summary.monthly_breakdown = summary_data.get('monthly_breakdown', [])
         summary.seasonal_pattern = summary_data.get('seasonal_pattern', {})
         summary.data_quality_flags = summary_data.get('data_quality_flags', [])
@@ -987,13 +994,14 @@ def delete_utility_connection(audit_id):
         
         # Update connection status
         connection.status = 'revoked'
-        connection.access_token_encrypted = None
-        connection.refresh_token_encrypted = None
+        connection.access_token_enc = None
+        connection.refresh_token_enc = None
         
         # Optionally delete data
         if delete_data:
-            UtilityUsageData.query.filter_by(utility_connection_id=connection.id).delete()
-            UtilityUsageSummary.query.filter_by(utility_connection_id=connection.id).delete()
+            UtilityUsageData.query.filter_by(connection_id=connection.id).delete()
+            UtilityUsageSummary.query.filter_by(connection_id=connection.id).delete()
+            UtilityIntervalData.query.filter_by(connection_id=connection.id).delete()
         
         db.session.commit()
         
