@@ -74,20 +74,30 @@ ANALYSIS FRAMEWORK
    - Look for heating vs cooling dominant patterns
    - Flag unusual shoulder season spikes
 
-3. TIME-OF-USE OPPORTUNITIES (if TOU data available)
-   - Calculate on-peak vs off-peak distribution
-   - Identify load-shifting potential
-   - Note appliances that could shift (pool pump, EV charging, laundry)
+3. TIME-OF-USE & INTERVAL ANALYSIS (PRIORITY when interval_summary available)
+   When interval_summary and daily_profiles are provided, USE THEM for:
+   - Identify peak hours from hourly_averages_kwh - these are the best TOU targets
+   - Compare weekday vs weekend profiles to understand occupancy patterns
+   - Calculate baseload_kw - this is always-on consumption (refrigerator, standby, etc.)
+   - Look for load-shifting opportunities based on actual usage times
+   - Identify specific hours with high consumption for targeted recommendations
+   
+   Example interval-based insights:
+   - "Peak usage occurs at 4-7 PM (0.8 kWh avg) - shifting laundry to 10 PM could save $X"
+   - "Baseload of 0.5 kW suggests significant standby power draw"
+   - "Weekend morning usage 40% higher than weekday - likely pool pump schedule"
 
 4. ANOMALY DETECTION
    - Flag months with usage >30% above/below trend
    - Look for baseload creep over time
    - Identify potential equipment issues
+   - With interval data: identify specific hours/days with unusual spikes
 
 5. EQUIPMENT CORRELATION
    - Match high usage periods to known HVAC characteristics
    - Consider appliance inventory impact
    - Account for solar production if present
+   - With interval data: correlate peak hours with expected HVAC runtime
 
 ═══════════════════════════════════════════════════════════════════════════════
 RECOMMENDATION CATEGORIES

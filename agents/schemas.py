@@ -342,6 +342,15 @@ class UtilityUsageSummarySchema(BaseModel):
         default=None,
         description="Data quality issues: missing months, estimated reads, etc.",
     )
+    # Interval data for granular TOU/load analysis
+    interval_summary: Optional[dict] = Field(
+        default=None,
+        description="Summary of 15-minute interval data: {total_intervals, date_range, hourly_averages, peak_hours, baseload_kw}",
+    )
+    daily_profiles: Optional[List[dict]] = Field(
+        default=None,
+        description="Representative daily load profiles: [{day_type: 'weekday'|'weekend', hourly_kwh: [0-23 array]}]",
+    )
 
 
 class EnergyUsageAnalysisInput(BaseModel):

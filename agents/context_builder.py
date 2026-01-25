@@ -1,6 +1,8 @@
 # agents/context_builder.py
-from typing import Optional
-from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from collections import defaultdict
+from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary, UtilityIntervalData
 from memory.config import memory_enabled, semantic_enabled, semantic_top_k, context_char_cap
 from memory.semantic import retrieve_relevant_snippets
 from memory.chat_memory import get_recent_messages
@@ -11,6 +13,9 @@ from agents.schemas import (
     ApplianceItem,
     SolarInfo,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_structured_context(audit_id: int, exclude_audio: bool = False) -> str:
@@ -134,6 +139,102 @@ def build_audio_context(audit_id: int) -> str:
     return "\n".join(lines)
 
 
+def _summarize_interval_data(connection_id: int) -> tuple[Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
+    """
+    Summarize interval data for the Energy Usage Agent.
+    
+    Processes raw 15-minute interval readings into:
+    1. An interval_summary with aggregated statistics
+    2. Daily load profiles (weekday vs weekend averages by hour)
+    
+    Args:
+        connection_id: The utility connection ID
+        
+    Returns:
+        Tuple of (interval_summary dict, daily_profiles list) or (None, None) if no data
+    """
+    intervals = UtilityIntervalData.query.filter_by(
+        connection_id=connection_id
+    ).order_by(UtilityIntervalData.interval_start).all()
+    
+    if not intervals:
+        return None, None
+    
+    logger.info(f"Summarizing {len(intervals)} intervals for connection {connection_id}")
+    
+    # Calculate hourly averages across all data
+    hourly_totals = defaultdict(list)  # hour -> list of kWh values
+    weekday_hourly = defaultdict(list)  # hour -> list of kWh values for weekdays
+    weekend_hourly = defaultdict(list)  # hour -> list of kWh values for weekends
+    
+    total_kwh = 0
+    min_date = None
+    max_date = None
+    
+    for interval in intervals:
+        hour = interval.interval_start.hour
+        kwh = interval.usage_kwh
+        day_of_week = interval.interval_start.weekday()  # 0=Monday, 6=Sunday
+        
+        hourly_totals[hour].append(kwh)
+        total_kwh += kwh
+        
+        if day_of_week < 5:  # Weekday
+            weekday_hourly[hour].append(kwh)
+        else:  # Weekend
+            weekend_hourly[hour].append(kwh)
+        
+        if min_date is None or interval.interval_start < min_date:
+            min_date = interval.interval_start
+        if max_date is None or interval.interval_end > max_date:
+            max_date = interval.interval_end
+    
+    # Calculate hourly averages
+    hourly_averages = {}
+    for hour in range(24):
+        if hourly_totals[hour]:
+            hourly_averages[hour] = round(sum(hourly_totals[hour]) / len(hourly_totals[hour]), 3)
+        else:
+            hourly_averages[hour] = 0
+    
+    # Identify peak hours (top 3 hours by average usage)
+    sorted_hours = sorted(hourly_averages.items(), key=lambda x: x[1], reverse=True)
+    peak_hours = [h for h, _ in sorted_hours[:3]]
+    
+    # Calculate baseload (minimum average across all hours)
+    baseload_kw = min(hourly_averages.values()) * 4 if hourly_averages else 0  # Convert 15-min kWh to kW
+    
+    # Build interval summary
+    interval_summary = {
+        "total_intervals": len(intervals),
+        "total_kwh": round(total_kwh, 2),
+        "date_range": {
+            "start": min_date.isoformat() if min_date else None,
+            "end": max_date.isoformat() if max_date else None,
+        },
+        "hourly_averages_kwh": hourly_averages,
+        "peak_hours": peak_hours,
+        "baseload_kw": round(baseload_kw, 2),
+    }
+    
+    # Build daily profiles
+    weekday_profile = [0] * 24
+    weekend_profile = [0] * 24
+    
+    for hour in range(24):
+        if weekday_hourly[hour]:
+            weekday_profile[hour] = round(sum(weekday_hourly[hour]) / len(weekday_hourly[hour]), 3)
+        if weekend_hourly[hour]:
+            weekend_profile[hour] = round(sum(weekend_hourly[hour]) / len(weekend_hourly[hour]), 3)
+    
+    daily_profiles = [
+        {"day_type": "weekday", "hourly_kwh": weekday_profile},
+        {"day_type": "weekend", "hourly_kwh": weekend_profile},
+    ]
+    
+    return interval_summary, daily_profiles
+
+
 def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput]:
     """Build EnergyUsageAnalysisInput context for the Energy Usage Agent.
     
@@ -166,6 +267,12 @@ def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput
     if not usage_summary:
         return None
     
+    # Get interval data summary if available
+    interval_summary, daily_profiles = _summarize_interval_data(connection.id)
+    
+    if interval_summary:
+        logger.info(f"Including {interval_summary.get('total_intervals', 0)} intervals in energy usage context")
+    
     # Build utility summary schema
     utility_schema = UtilityUsageSummarySchema(
         fuel_type=usage_summary.fuel_type or 'electric',
@@ -177,6 +284,8 @@ def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput
         seasonal_pattern=usage_summary.seasonal_pattern,
         tou_data=usage_summary.tou_data,
         data_quality_flags=usage_summary.data_quality_flags,
+        interval_summary=interval_summary,
+        daily_profiles=daily_profiles,
     )
     
     # Get audit for property and interview data
