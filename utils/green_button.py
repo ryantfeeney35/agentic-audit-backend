@@ -532,6 +532,8 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     # Parse bills - UtilityAPI bills have usage data in 'base' block
     bills = response_data.get('bills', [])
     
+    logger.info(f"parse_aggregator_response: Processing {len(bills)} bills")
+    
     for bill in bills:
         # UtilityAPI puts billing data in the 'base' block
         base = bill.get('base', {})
@@ -540,8 +542,10 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
         start_date = base.get('bill_start_date') or bill.get('bill_start_date')
         end_date = base.get('bill_end_date') or bill.get('bill_end_date')
         
+        logger.debug(f"Bill uid={bill.get('uid')}: base keys={list(base.keys())}, start={start_date}, end={end_date}")
+        
         if not start_date or not end_date:
-            logger.debug(f"Skipping bill without dates: uid={bill.get('uid')}")
+            logger.warning(f"Skipping bill without dates: uid={bill.get('uid')}, base={base}")
             continue
         
         # Get usage from base block
