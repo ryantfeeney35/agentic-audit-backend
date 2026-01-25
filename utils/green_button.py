@@ -510,17 +510,15 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse response from UtilityAPI or similar aggregator.
     
-    Aggregators typically return JSON with a different structure than
-    ESPI. This normalizes that to our internal format.
+    UtilityAPI bills have a specific structure with a 'base' block containing
+    usage and cost data. See: https://utilityapi.com/docs/api/bills
     
     Args:
-        response_data: JSON response from aggregator API
+        response_data: JSON response from aggregator API containing 'bills' and 'intervals'
         
     Returns:
         Normalized data dictionary matching parse_espi_atom_xml output
     """
-    # This is a placeholder for UtilityAPI-specific parsing
-    # Will be implemented in Phase 3 when UtilityAPI provider is added
     result = {
         'fuel_type': 'electric',
         'unit': 'kWh',
@@ -531,33 +529,111 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
         'metadata': {},
     }
     
-    # UtilityAPI typically returns bills with usage data
+    # Parse bills - UtilityAPI bills have usage data in 'base' block
     bills = response_data.get('bills', [])
     
     for bill in bills:
-        start_date = bill.get('bill_start_date') or bill.get('start')
-        end_date = bill.get('bill_end_date') or bill.get('end')
+        # UtilityAPI puts billing data in the 'base' block
+        base = bill.get('base', {})
+        
+        # Get dates from base block (preferred) or top level
+        start_date = base.get('bill_start_date') or bill.get('bill_start_date')
+        end_date = base.get('bill_end_date') or bill.get('bill_end_date')
         
         if not start_date or not end_date:
+            logger.debug(f"Skipping bill without dates: uid={bill.get('uid')}")
             continue
         
-        # Determine month key
-        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-        month_key = start_dt.strftime('%Y-%m')
+        # Get usage from base block
+        # UtilityAPI provides: bill_total_kwh, bill_total_volume, bill_total_unit
+        usage = base.get('bill_total_kwh') or base.get('bill_total_volume') or 0
+        cost = base.get('bill_total_cost')
+        unit = base.get('bill_total_unit', 'kwh').upper()
+        
+        # Determine fuel type from service_class
+        service_class = base.get('service_class', '')
+        if 'gas' in service_class.lower():
+            result['fuel_type'] = 'gas'
+            result['unit'] = 'therms' if unit.lower() == 'therms' else 'kWh'
+        
+        # Store meter_id if available
+        if base.get('service_identifier') and not result['meter_id']:
+            result['meter_id'] = base.get('service_identifier')
+        
+        # Parse start date for month key
+        try:
+            # Handle ISO8601 formats like "2025-01-07T00:00:00.000000-08:00"
+            start_str = start_date.replace('Z', '+00:00')
+            if 'T' in start_str:
+                start_dt = datetime.fromisoformat(start_str)
+            else:
+                start_dt = datetime.strptime(start_str[:10], '%Y-%m-%d')
+            month_key = start_dt.strftime('%Y-%m')
+        except Exception as e:
+            logger.warning(f"Failed to parse bill start date '{start_date}': {e}")
+            continue
         
         result['billing_periods'].append({
             'month': month_key,
-            'start_date': start_date[:10],
-            'end_date': end_date[:10],
-            'usage': bill.get('bill_total_kwh', 0),
-            'cost_usd': bill.get('bill_total_cost'),
-            'unit': 'kWh',
+            'start_date': start_date[:10] if 'T' in start_date else start_date,
+            'end_date': end_date[:10] if 'T' in end_date else end_date,
+            'usage': float(usage) if usage else 0,
+            'cost_usd': float(cost) if cost else None,
+            'unit': result['unit'],
             'num_intervals': 0,
             'quality_flags': [],
+            'bill_uid': bill.get('uid'),
+            'service_tariff': base.get('service_tariff'),
+            'service_address': base.get('service_address'),
         })
     
-    # Sort by month
+    # Parse intervals - UtilityAPI intervals have readings in 'readings' block
+    intervals = response_data.get('intervals', [])
+    
+    for interval_obj in intervals:
+        # Each interval object contains a 'readings' block with actual readings
+        readings_block = interval_obj.get('readings', {})
+        readings = readings_block.get('readings', [])
+        
+        for reading in readings:
+            start = reading.get('start')
+            end = reading.get('end')
+            value = reading.get('value')  # Usually in Wh, need to convert to kWh
+            
+            if not start or value is None:
+                continue
+            
+            # Convert Wh to kWh if needed
+            reading_value = float(value)
+            # UtilityAPI typically provides values in Wh, convert to kWh
+            if reading_value > 1000:  # Likely in Wh
+                reading_value = reading_value / 1000
+            
+            result['intervals'].append({
+                'start': start,
+                'end': end,
+                'value': reading_value,
+                'unit': 'kWh',
+                'interval_uid': interval_obj.get('uid'),
+            })
+    
+    # Sort billing periods by month
     result['billing_periods'].sort(key=lambda x: x['month'])
+    
+    # Sort intervals by start time
+    result['intervals'].sort(key=lambda x: x['start'])
+    
+    # Add metadata
+    result['metadata'] = {
+        'source': response_data.get('source', 'utilityapi'),
+        'bills_parsed': len(result['billing_periods']),
+        'intervals_parsed': len(result['intervals']),
+    }
+    
+    logger.debug(
+        f"Parsed UtilityAPI response: {len(result['billing_periods'])} bills, "
+        f"{len(result['intervals'])} intervals"
+    )
     
     return result
 

@@ -269,6 +269,9 @@ class UtilityAPIProvider(UtilityProvider):
         """
         Fetch and persist usage data from UtilityAPI.
         
+        Stores individual bill records in utility_usage_data and creates
+        a normalized summary in utility_usage_summary.
+        
         Args:
             connection_id: ID of the UtilityConnection to sync
             
@@ -328,24 +331,64 @@ class UtilityAPIProvider(UtilityProvider):
                 db.session.commit()
                 return SyncResult(success=False, error=parsed_data["error"])
             
-            # Persist raw data
-            raw_record = UtilityUsageData(
-                user_id=connection.user_id,
-                audit_id=connection.audit_id,
-                connection_id=connection.id,
-                period_start=datetime.utcnow().date(),
-                period_end=datetime.utcnow().date(),
-                usage_amount=0,
-                unit=parsed_data.get("unit", "kWh"),
-                source="api",
-                raw_data={
-                    "format": "utilityapi_json",
-                    "fetched_at": datetime.utcnow().isoformat(),
-                    "bills_count": len(bills_data),
-                    "intervals_count": len(intervals_data),
-                },
-            )
-            db.session.add(raw_record)
+            # Track existing bill UIDs to avoid duplicates
+            existing_records = UtilityUsageData.query.filter_by(
+                connection_id=connection.id
+            ).all()
+            existing_bill_uids = set()
+            for record in existing_records:
+                if record.raw_data and record.raw_data.get('bill_uid'):
+                    existing_bill_uids.add(record.raw_data['bill_uid'])
+            
+            # Persist individual bill records
+            records_imported = 0
+            for bill_period in parsed_data.get('billing_periods', []):
+                bill_uid = bill_period.get('bill_uid')
+                
+                # Skip if we already have this bill
+                if bill_uid and bill_uid in existing_bill_uids:
+                    logger.debug(f"Skipping duplicate bill: {bill_uid}")
+                    continue
+                
+                # Parse dates
+                try:
+                    period_start = datetime.strptime(bill_period['start_date'], '%Y-%m-%d').date()
+                    period_end = datetime.strptime(bill_period['end_date'], '%Y-%m-%d').date()
+                except Exception as e:
+                    logger.warning(f"Failed to parse bill dates: {e}")
+                    continue
+                
+                usage_record = UtilityUsageData(
+                    user_id=connection.user_id,
+                    audit_id=connection.audit_id,
+                    connection_id=connection.id,
+                    period_start=period_start,
+                    period_end=period_end,
+                    usage_amount=bill_period.get('usage', 0),
+                    unit=bill_period.get('unit', 'kWh'),
+                    cost_usd=bill_period.get('cost_usd'),
+                    source="api",
+                    raw_data={
+                        "format": "utilityapi_bill",
+                        "bill_uid": bill_uid,
+                        "service_tariff": bill_period.get('service_tariff'),
+                        "service_address": bill_period.get('service_address'),
+                        "month": bill_period.get('month'),
+                    },
+                )
+                db.session.add(usage_record)
+                records_imported += 1
+                
+                if bill_uid:
+                    existing_bill_uids.add(bill_uid)
+            
+            # Persist interval records (15-minute data) if available
+            # Group intervals by day to avoid too many records
+            intervals_imported = 0
+            if parsed_data.get('intervals'):
+                # For now, store interval metadata in summary
+                # Could expand to store individual intervals if needed
+                intervals_imported = len(parsed_data['intervals'])
             
             # Normalize and persist summary
             summary_data = normalize_usage_to_summary(
@@ -398,11 +441,14 @@ class UtilityAPIProvider(UtilityProvider):
             
             months_covered = len(summary_data.get("monthly_breakdown", []))
             
-            logger.info(f"UtilityAPI sync complete for connection {connection_id}: {months_covered} months")
+            logger.info(
+                f"UtilityAPI sync complete for connection {connection_id}: "
+                f"{records_imported} bills, {intervals_imported} intervals, {months_covered} months"
+            )
             
             return SyncResult(
                 success=True,
-                records_imported=len(bills_data),
+                records_imported=records_imported,
                 date_range_start=summary_data.get("start_date"),
                 date_range_end=summary_data.get("end_date"),
                 months_covered=months_covered,
