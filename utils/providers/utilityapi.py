@@ -42,8 +42,8 @@ def _get_db():
 
 def _get_models():
     """Lazy import of models to avoid circular imports."""
-    from models import UtilityConnection, UtilityUsageData, UtilityUsageSummary
-    return UtilityConnection, UtilityUsageData, UtilityUsageSummary
+    from models import UtilityConnection, UtilityUsageData, UtilityUsageSummary, UtilityIntervalData
+    return UtilityConnection, UtilityUsageData, UtilityUsageSummary, UtilityIntervalData
 
 
 def _get_green_button():
@@ -279,7 +279,7 @@ class UtilityAPIProvider(UtilityProvider):
             SyncResult with import details
         """
         db = _get_db()
-        UtilityConnection, UtilityUsageData, UtilityUsageSummary = _get_models()
+        UtilityConnection, UtilityUsageData, UtilityUsageSummary, UtilityIntervalData = _get_models()
         parse_aggregator_response, normalize_usage_to_summary = _get_green_button()
         
         connection = UtilityConnection.query.get(connection_id)
@@ -383,12 +383,63 @@ class UtilityAPIProvider(UtilityProvider):
                     existing_bill_uids.add(bill_uid)
             
             # Persist interval records (15-minute data) if available
-            # Group intervals by day to avoid too many records
             intervals_imported = 0
             if parsed_data.get('intervals'):
-                # For now, store interval metadata in summary
-                # Could expand to store individual intervals if needed
-                intervals_imported = len(parsed_data['intervals'])
+                # Get existing interval UIDs to avoid duplicates
+                existing_interval_uids = set()
+                existing_intervals = UtilityIntervalData.query.filter_by(
+                    connection_id=connection.id
+                ).with_entities(UtilityIntervalData.interval_uid).all()
+                for (uid,) in existing_intervals:
+                    if uid:
+                        existing_interval_uids.add(uid)
+                
+                for interval in parsed_data['intervals']:
+                    interval_uid = interval.get('interval_uid')
+                    
+                    # Skip duplicates
+                    if interval_uid and interval_uid in existing_interval_uids:
+                        continue
+                    
+                    # Parse interval timestamps
+                    try:
+                        start_str = interval.get('start', '').replace('Z', '+00:00')
+                        end_str = interval.get('end', '').replace('Z', '+00:00') if interval.get('end') else None
+                        
+                        if 'T' in start_str:
+                            interval_start = datetime.fromisoformat(start_str)
+                        else:
+                            interval_start = datetime.strptime(start_str[:19], '%Y-%m-%d %H:%M:%S')
+                        
+                        # If no end time, assume 15-minute interval
+                        if end_str:
+                            if 'T' in end_str:
+                                interval_end = datetime.fromisoformat(end_str)
+                            else:
+                                interval_end = datetime.strptime(end_str[:19], '%Y-%m-%d %H:%M:%S')
+                        else:
+                            interval_end = interval_start + timedelta(minutes=15)
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to parse interval timestamps: {e}")
+                        continue
+                    
+                    interval_record = UtilityIntervalData(
+                        user_id=connection.user_id,
+                        audit_id=connection.audit_id,
+                        connection_id=connection.id,
+                        interval_start=interval_start,
+                        interval_end=interval_end,
+                        usage_kwh=interval.get('value', 0),
+                        interval_uid=interval_uid,
+                    )
+                    db.session.add(interval_record)
+                    intervals_imported += 1
+                    
+                    if interval_uid:
+                        existing_interval_uids.add(interval_uid)
+                
+                logger.info(f"Stored {intervals_imported} interval records for connection {connection_id}")
             
             # Normalize and persist summary
             summary_data = normalize_usage_to_summary(

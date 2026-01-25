@@ -226,6 +226,7 @@ class UtilityConnection(db.Model):
     # Relationships
     audit = relationship("Audit", backref="utility_connections")
     usage_data = relationship("UtilityUsageData", back_populates="connection", cascade="all, delete-orphan")
+    interval_data = relationship("UtilityIntervalData", back_populates="connection", cascade="all, delete-orphan")
     usage_summary = relationship("UtilityUsageSummary", back_populates="connection", uselist=False, cascade="all, delete-orphan")
 
     @property
@@ -298,6 +299,46 @@ class UtilityUsageData(db.Model):
     # Relationships
     connection = relationship("UtilityConnection", back_populates="usage_data")
     audit = relationship("Audit", backref="utility_usage_records")
+
+
+class UtilityIntervalData(db.Model):
+    """
+    High-resolution utility interval data (15-minute or hourly).
+    
+    Stores granular usage readings from Green Button or UtilityAPI intervals.
+    Used for detailed load analysis, TOU optimization, and peak demand tracking.
+    
+    Note: This can generate many records (2,880 per month for 15-min intervals).
+    Consider periodic cleanup or aggregation for older data.
+    """
+    __tablename__ = "utility_interval_data"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    connection_id = db.Column(db.Integer, db.ForeignKey("utility_connections.id", ondelete="CASCADE"), nullable=False)
+    
+    # Interval timing (using DateTime for precision)
+    interval_start = db.Column(db.DateTime, nullable=False)
+    interval_end = db.Column(db.DateTime, nullable=False)
+    
+    # Usage data
+    usage_kwh = db.Column(db.Float, nullable=False)  # kWh for this interval
+    
+    # Data source identifiers (for deduplication)
+    interval_uid = db.Column(db.String(100), nullable=True)  # UtilityAPI interval UID
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationships
+    connection = relationship("UtilityConnection", back_populates="interval_data")
+    audit = relationship("Audit", backref="utility_interval_records")
+
+    # Index for efficient querying by connection and time range
+    __table_args__ = (
+        db.Index('ix_interval_connection_time', 'connection_id', 'interval_start'),
+    )
 
 
 class UtilityUsageSummary(db.Model):
