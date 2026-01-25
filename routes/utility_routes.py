@@ -784,12 +784,12 @@ def get_utility_summary(audit_id):
                 'fuel_type': summary.fuel_type,
                 'start_date': summary.start_date.isoformat() if summary.start_date else None,
                 'end_date': summary.end_date.isoformat() if summary.end_date else None,
-                'annual_usage_kwh': summary.annual_usage,
+                'annual_usage_kwh': summary.annual_usage or 0,
                 'annual_cost_usd': summary.annual_cost_usd,
-                'monthly_breakdown': summary.monthly_breakdown,
+                'monthly_breakdown': summary.monthly_breakdown or [],
                 'seasonal_pattern': summary.seasonal_pattern,
                 'tou_data': summary.tou_data,
-                'data_quality_flags': summary.data_quality_flags
+                'data_quality_flags': summary.data_quality_flags or []
             }
         
         return jsonify({
@@ -943,7 +943,7 @@ def submit_manual_utility_data(audit_id):
             'success': True,
             'connection_id': connection.id,
             'summary': {
-                'annual_usage_kwh': summary.annual_usage_kwh,
+                'annual_usage_kwh': summary.annual_usage or 0,
                 'annual_cost_usd': summary.annual_cost_usd,
                 'months_covered': len(monthly_data)
             }
