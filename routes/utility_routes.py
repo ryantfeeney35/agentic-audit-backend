@@ -485,22 +485,59 @@ def get_utility_connection(audit_id):
         if not connection:
             return jsonify({
                 'connected': False,
-                'connection': None
+                'connection': None,
+                'summary': None
             }), 200
+        
+        # Get provider type from registry
+        provider = registry.get_provider(connection.provider_name)
+        provider_type = provider.provider_type.value if provider else 'unknown'
+        
+        # Build connection response
+        connection_data = {
+            'id': connection.id,
+            'provider_name': connection.provider_name,
+            'provider_type': provider_type,
+            'utility_name': connection.utility_name,
+            'status': connection.status,
+            'data_scope': connection.data_scope,
+            'last_sync_at': connection.last_sync_at.isoformat() if connection.last_sync_at else None,
+            'error_message': connection.last_sync_error,
+            'created_at': connection.created_at.isoformat(),
+            'updated_at': connection.updated_at.isoformat() if connection.updated_at else None
+        }
+        
+        # Get usage summary if connected
+        summary_data = None
+        if connection.status == 'connected':
+            summary = UtilityUsageSummary.query.filter_by(
+                connection_id=connection.id
+            ).first()
+            
+            if summary:
+                # Format seasonal pattern for frontend
+                seasonal_pattern = None
+                if summary.seasonal_pattern:
+                    seasonal_pattern = {
+                        'summer_avg': summary.seasonal_pattern.get('summer', 0),
+                        'winter_avg': summary.seasonal_pattern.get('winter', 0),
+                    }
+                
+                summary_data = {
+                    'fuel_type': summary.fuel_type,
+                    'start_date': summary.start_date.isoformat() if summary.start_date else None,
+                    'end_date': summary.end_date.isoformat() if summary.end_date else None,
+                    'annual_usage_kwh': summary.annual_usage or 0,
+                    'annual_cost_usd': summary.annual_cost_usd,
+                    'monthly_breakdown': summary.monthly_breakdown or [],
+                    'seasonal_pattern': seasonal_pattern,
+                    'data_quality_flags': summary.data_quality_flags or [],
+                }
         
         return jsonify({
             'connected': connection.status == 'connected',
-            'connection': {
-                'id': connection.id,
-                'provider_name': connection.provider_name,
-                'utility_name': connection.utility_name,
-                'status': connection.status,
-                'data_scope': connection.data_scope,
-                'last_sync_at': connection.last_sync_at.isoformat() if connection.last_sync_at else None,
-                'last_sync_error': connection.last_sync_error,
-                'created_at': connection.created_at.isoformat(),
-                'updated_at': connection.updated_at.isoformat() if connection.updated_at else None
-            }
+            'connection': connection_data,
+            'summary': summary_data
         }), 200
         
     except Exception as e:
@@ -600,6 +637,106 @@ def sync_utility_data(audit_id):
         
     except Exception as e:
         logger.error(f"Error syncing utility data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@audit_utility_bp.route('/utility-data/trigger-collection', methods=['POST'])
+@require_auth
+def trigger_historical_collection(audit_id):
+    """
+    POST /api/audits/<audit_id>/utility-data/trigger-collection
+    
+    Manually trigger historical data collection for an existing UtilityAPI connection.
+    This is useful if the initial collection failed (e.g., due to payment issues)
+    and you want to retry after adding balance.
+    """
+    try:
+        user_id = g.current_user['id']
+        
+        # Verify audit access
+        audit = Audit.query.filter_by(id=audit_id, user_id=user_id).first()
+        if not audit:
+            return jsonify({'error': 'Audit not found or access denied'}), 404
+        
+        # Get connection (must be utilityapi provider)
+        connection = UtilityConnection.query.filter_by(
+            audit_id=audit_id,
+            user_id=user_id,
+            provider_name='utilityapi'
+        ).filter(UtilityConnection.status.in_(['connected', 'pending_authorization'])).first()
+        
+        if not connection:
+            return jsonify({'error': 'No UtilityAPI connection found for this audit'}), 404
+        
+        # Get authorization_uid from metadata
+        authorization_uid = connection.provider_metadata.get('authorization_uid') if connection.provider_metadata else None
+        
+        if not authorization_uid:
+            return jsonify({'error': 'Connection is missing authorization_uid - user may need to re-authorize'}), 400
+        
+        # Get provider and fetch meters
+        from utils.providers.utilityapi import UtilityAPIProvider
+        provider = UtilityAPIProvider()
+        
+        # First get meters for this authorization
+        meters_response = provider.get_meters_for_authorization(str(authorization_uid))
+        
+        if not meters_response.get('success'):
+            return jsonify({
+                'success': False,
+                'error': f"Failed to fetch meters: {meters_response.get('error')}"
+            }), 400
+        
+        meters = meters_response.get('meters', [])
+        if not meters:
+            return jsonify({
+                'success': False,
+                'error': 'No meters found for this authorization'
+            }), 400
+        
+        meter_uids = [str(m.get('uid')) for m in meters if m.get('uid')]
+        
+        # Trigger historical collection
+        collection_duration = request.json.get('months', 12) if request.is_json else 12
+        collection_result = provider.trigger_historical_collection(
+            meter_uids=meter_uids,
+            collection_duration_months=min(collection_duration, 36)  # Cap at 36 months
+        )
+        
+        if collection_result.get('success'):
+            # Update provider_metadata with meter_uids
+            from sqlalchemy.orm.attributes import flag_modified
+            metadata = dict(connection.provider_metadata or {})
+            metadata['meter_uids'] = meter_uids
+            metadata['collection_triggered_at'] = datetime.utcnow().isoformat()
+            connection.provider_metadata = metadata
+            flag_modified(connection, 'provider_metadata')
+            db.session.commit()
+            
+            logger.info(
+                "UTILITY_HISTORICAL_COLLECTION_TRIGGERED | connection=%s audit=%s meters=%s",
+                connection.id, audit_id, meter_uids
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Historical collection triggered. Data will arrive via webhook events.',
+                'meters': collection_result.get('meters'),
+                'collection_duration_months': collection_result.get('collection_duration')
+            }), 200
+        else:
+            error_msg = collection_result.get('error', 'Unknown error')
+            logger.warning(
+                "UTILITY_HISTORICAL_COLLECTION_FAILED | connection=%s audit=%s error=%s",
+                connection.id, audit_id, error_msg
+            )
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 400
+        
+    except Exception as e:
+        logger.error(f"Error triggering historical collection: {e}")
         return jsonify({'error': str(e)}), 500
 
 
