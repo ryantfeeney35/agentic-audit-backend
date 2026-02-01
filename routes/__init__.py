@@ -9,7 +9,6 @@ from .contractor_routes import bp as contractor_bp
 from .report_routes import bp as report_bp
 from .utility_routes import utility_bp, audit_utility_bp
 from .webhook_routes import webhook_bp
-from .supabase_webhook_routes import supabase_webhook_bp
 
 def register_blueprints(app):
     app.register_blueprint(auth_bp, url_prefix="/api")
@@ -26,4 +25,3 @@ def register_blueprints(app):
     app.register_blueprint(audit_utility_bp)
     # Webhook routes - publicly accessible, no /api prefix
     app.register_blueprint(webhook_bp)
-    app.register_blueprint(supabase_webhook_bp)

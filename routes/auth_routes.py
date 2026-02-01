@@ -115,8 +115,7 @@ def get_current_user():
 def signup():
     """
     Register new user with email and password via Supabase Auth.
-    Creates local user record immediately to prevent limbo state.
-    User will still need to confirm email before they can log in.
+    Creates local user record immediately.
     """
     try:
         data = request.get_json()
@@ -139,24 +138,14 @@ def signup():
             return jsonify({'error': 'Registration failed'}), 400
         
         # Create local user record immediately
-        # This prevents the "limbo" state where Supabase has the user but our DB doesn't
         try:
             _ensure_local_user(response.user.id, response.user.email)
         except Exception as e:
             logging.warning(f"Could not create local user record during signup: {e}")
             # Don't fail signup - Supabase user exists, local record will sync on login
-        
-        # Check if email confirmation is required
-        # Supabase returns identities=[] when email is unconfirmed
-        requires_confirmation = (
-            response.user.identities is None or 
-            len(response.user.identities) == 0 or
-            response.user.confirmed_at is None
-        )
             
         return jsonify({
-            'message': 'Please check your email to confirm your account.' if requires_confirmation else 'Registration successful',
-            'requires_confirmation': requires_confirmation,
+            'message': 'Registration successful',
             'user': {
                 'id': response.user.id,
                 'email': response.user.email
@@ -170,37 +159,6 @@ def signup():
         if 'already registered' in error_msg or 'already exists' in error_msg:
             return jsonify({'error': 'An account with this email already exists'}), 400
         return jsonify({'error': 'Registration failed'}), 400
-
-
-@bp.route('/auth/resend-confirmation', methods=['POST'])
-def resend_confirmation():
-    """
-    Resend email confirmation link for unconfirmed users.
-    """
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        
-        if not email:
-            return jsonify({'error': 'Email is required'}), 400
-        
-        # Use Supabase's resend method
-        response = supabase.auth.resend({
-            "type": "signup",
-            "email": email
-        })
-        
-        # Always return success to prevent email enumeration
-        return jsonify({
-            'message': 'If an account exists with this email, a confirmation link has been sent.'
-        }), 200
-        
-    except Exception as e:
-        logging.error(f"Resend confirmation error: {e}")
-        # Still return success to prevent email enumeration
-        return jsonify({
-            'message': 'If an account exists with this email, a confirmation link has been sent.'
-        }), 200
 
 
 @bp.route('/auth/sync-user', methods=['POST'])
