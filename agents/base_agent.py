@@ -16,12 +16,14 @@ from .schemas import (
     RoofMediaSchema,
 )
 from .roi import enrich_recommendations_with_roi
+from .services.prompt_helpers import get_service_taxonomy_prompt
 from models import AgentConversation, db
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
 
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
 
@@ -33,6 +35,9 @@ MEDIA_SCHEMAS = {
     "interview": InterviewSchema,
     "interior": InteriorRoomSchema,
     "roof": RoofMediaSchema,
+    # energy_usage uses EnergyUsageAgentOutput via dedicated analyze function
+    # but we map it here for potential future media processing
+    "energy_usage": None,  # Uses custom schema via energy_usage.py
 }
 
 
@@ -294,6 +299,15 @@ def run_agent(
             if is_audio_only
             else ""
         )
+        
+        # Get service catalog taxonomy to constrain recommendations to offered services
+        service_taxonomy = get_service_taxonomy_prompt(domain=domain)
+        service_constraint = (
+            f"\n\nSERVICE CATALOG CONSTRAINT:\n{service_taxonomy}\n"
+            if service_taxonomy
+            else ""
+        )
+        
         system_instructions = (
             f"You are the {domain.capitalize()} Agent operating under the CREIA home energy assessment protocol\n"
             "in STRICT EVIDENCE MODE (Option A).\n"
@@ -323,6 +337,7 @@ def run_agent(
             "- Do NOT invent numeric cost, annual savings, or payback values. If your schema includes numeric\n"
             "  ROI-related fields, set them to null/0/omitted so that a downstream deterministic ROI system can\n"
             "  populate them.\n"
+            f"{service_constraint}"
             "\n"
             "Task in recommendations mode:\n"
             "- Always return JSON conforming to AgentOutput.\n"
@@ -332,6 +347,7 @@ def run_agent(
             "    * Be specific and actionable.\n"
             "    * Be clearly tied to evidence in the context (even if you do not explicitly list that evidence).\n"
             "    * Be appropriate for the domain ({domain}).\n"
+            "    * Map to one of the allowed services from the SERVICE CATALOG above.\n"
             "- If there is insufficient evidence for any recommendation, return an EMPTY `recommendations` list.\n"
             f"{extra}"
         )

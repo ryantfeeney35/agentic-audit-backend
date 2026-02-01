@@ -2,8 +2,17 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
-from models import db
-from routes.auth_routes import bp as auth_bp
+import sqlalchemy as sa
+
+# Create a minimal User model for tests (avoids importing models with JSONB)
+from flask_sqlalchemy import SQLAlchemy
+test_db = SQLAlchemy()
+
+class TestUser(test_db.Model):
+    """Minimal User model for auth tests - avoids JSONB incompatibility with SQLite"""
+    __tablename__ = 'users'
+    id = test_db.Column(test_db.String, primary_key=True)
+    email = test_db.Column(test_db.String(255), unique=True, nullable=False)
 
 
 class TestAuthRoutes:
@@ -15,11 +24,16 @@ class TestAuthRoutes:
         app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
         
-        db.init_app(app)
-        app.register_blueprint(auth_bp, url_prefix='/api')
+        test_db.init_app(app)
+        
+        # Import and register blueprint with mocked dependencies
+        with patch('routes.auth_routes.db', test_db):
+            with patch('routes.auth_routes.User', TestUser):
+                from routes.auth_routes import bp as auth_bp
+                app.register_blueprint(auth_bp, url_prefix='/api')
         
         with app.app_context():
-            db.create_all()
+            test_db.create_all()
             
         return app
 
@@ -81,16 +95,20 @@ class TestAuthRoutes:
         assert response.status_code == 400
         assert 'Email and password required' in response.json['error']
 
+    @patch('routes.auth_routes._ensure_local_user')
     @patch('routes.auth_routes.supabase')
-    def test_signup_success(self, mock_supabase, client):
-        """Test successful signup"""
-        # Mock Supabase response
+    def test_signup_success_requires_confirmation(self, mock_supabase, mock_ensure_user, client):
+        """Test successful signup with email confirmation required"""
+        # Mock Supabase response - unconfirmed user (empty identities)
         mock_response = MagicMock()
         mock_response.user = MagicMock()
         mock_response.user.id = 'user-123'
         mock_response.user.email = 'newuser@example.com'
+        mock_response.user.identities = []  # Empty = unconfirmed
+        mock_response.user.confirmed_at = None
         
         mock_supabase.auth.sign_up.return_value = mock_response
+        mock_ensure_user.return_value = MagicMock()
         
         signup_data = {
             'email': 'newuser@example.com',
@@ -100,8 +118,36 @@ class TestAuthRoutes:
         response = client.post('/api/auth/signup', json=signup_data)
         
         assert response.status_code == 201
-        assert 'Registration successful' in response.json['message']
+        assert 'check your email' in response.json['message'].lower()
+        assert response.json['requires_confirmation'] == True
         assert response.json['user']['email'] == 'newuser@example.com'
+        # Verify local user was created
+        mock_ensure_user.assert_called_once_with('user-123', 'newuser@example.com')
+
+    @patch('routes.auth_routes._ensure_local_user')
+    @patch('routes.auth_routes.supabase')
+    def test_signup_success_no_confirmation(self, mock_supabase, mock_ensure_user, client):
+        """Test successful signup when email confirmation is disabled"""
+        # Mock Supabase response - confirmed user
+        mock_response = MagicMock()
+        mock_response.user = MagicMock()
+        mock_response.user.id = 'user-123'
+        mock_response.user.email = 'newuser@example.com'
+        mock_response.user.identities = [{'id': '123'}]  # Has identity = confirmed
+        mock_response.user.confirmed_at = '2025-01-31T00:00:00Z'
+        
+        mock_supabase.auth.sign_up.return_value = mock_response
+        mock_ensure_user.return_value = MagicMock()
+        
+        signup_data = {
+            'email': 'newuser@example.com',
+            'password': 'password123'
+        }
+        
+        response = client.post('/api/auth/signup', json=signup_data)
+        
+        assert response.status_code == 201
+        assert response.json['requires_confirmation'] == False
 
     @patch('routes.auth_routes.supabase')
     def test_signup_weak_password(self, mock_supabase, client):
@@ -115,6 +161,26 @@ class TestAuthRoutes:
         
         assert response.status_code == 400
         assert 'Password must be at least 6 characters' in response.json['error']
+
+    @patch('routes.auth_routes.supabase')
+    def test_resend_confirmation(self, mock_supabase, client):
+        """Test resend confirmation email endpoint"""
+        mock_supabase.auth.resend.return_value = MagicMock()
+        
+        response = client.post('/api/auth/resend-confirmation', json={
+            'email': 'test@example.com'
+        })
+        
+        assert response.status_code == 200
+        assert 'confirmation link has been sent' in response.json['message'].lower()
+
+    @patch('routes.auth_routes.supabase')
+    def test_resend_confirmation_missing_email(self, mock_supabase, client):
+        """Test resend confirmation with missing email"""
+        response = client.post('/api/auth/resend-confirmation', json={})
+        
+        assert response.status_code == 400
+        assert 'Email is required' in response.json['error']
 
     @patch('routes.auth_routes.supabase')
     @patch('auth.validate_token')
@@ -131,6 +197,23 @@ class TestAuthRoutes:
         })
         
         assert response.status_code == 200
+        assert response.json['user']['email'] == 'test@example.com'
+
+    @patch('routes.auth_routes.supabase')
+    @patch('auth.validate_token')
+    def test_sync_user(self, mock_validate_token, mock_supabase, client):
+        """Test user sync endpoint"""
+        mock_validate_token.return_value = {
+            'id': 'user-123',
+            'email': 'test@example.com'
+        }
+        
+        response = client.post('/api/auth/sync-user', headers={
+            'Authorization': 'Bearer valid-token'
+        })
+        
+        assert response.status_code == 200
+        assert response.json['synced'] == True
         assert response.json['user']['email'] == 'test@example.com'
 
     @patch('routes.auth_routes.supabase')

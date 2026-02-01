@@ -18,6 +18,9 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Configure UtilityAPI webhook secret (for webhook signature verification)
+app.config['UTILITYAPI_WEBHOOK_SECRET'] = os.getenv('UTILITYAPI_WEBHOOK_SECRET')
+
 # Setup extensions
 db.init_app(app)
 migrate = Migrate(app, db)

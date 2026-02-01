@@ -1,8 +1,9 @@
 # agents/orchestrator.py
 import logging
 from .base_agent import run_agent
-from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context
+from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context, get_energy_usage_context
 from .schemas import StepType
+from .services.filter import filter_and_enrich_recommendations
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
@@ -18,9 +19,106 @@ except Exception:  # pragma: no cover - import guard
 from urllib.request import urlopen
 from memory.config import semantic_enabled
 from memory.semantic import upsert_embeddings_for_audit
+# Energy Usage Agent for utility data analysis
+try:
+    from .energy_usage import EnergyUsageAgent, convert_to_standard_recommendations
+except ImportError:
+    EnergyUsageAgent = None  # type: ignore
+    convert_to_standard_recommendations = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def _deduplicate_recommendations(recs: list) -> list:
+    """
+    Deduplicate recommendations based on fuzzy matching of summaries.
+    
+    Strategy:
+    1. Normalize and tokenize summaries for comparison
+    2. If two recommendations have >70% word overlap AND same step_type,
+       keep the one with more detail (longer summary)
+    3. Preserve order (earlier recs preferred if equal)
+    
+    Args:
+        recs: List of recommendation dicts with 'summary' and 'step_type' keys
+        
+    Returns:
+        Deduplicated list of recommendations
+    """
+    if not recs:
+        return recs
+    
+    import re
+    
+    def _normalize(text: str) -> set:
+        """Convert text to normalized word set for comparison."""
+        if not text:
+            return set()
+        # Lowercase, remove punctuation, split into words
+        text = str(text).lower()
+        text = re.sub(r'[^\w\s]', ' ', text)
+        words = set(text.split())
+        # Remove common stop words
+        stop_words = {'the', 'a', 'an', 'is', 'are', 'to', 'and', 'or', 'of', 'for', 'in', 'on', 'with'}
+        return words - stop_words
+    
+    def _similarity(words1: set, words2: set) -> float:
+        """Calculate Jaccard similarity between two word sets."""
+        if not words1 or not words2:
+            return 0.0
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        return intersection / union if union > 0 else 0.0
+    
+    # Pre-compute normalized summaries
+    normalized = []
+    for r in recs:
+        normalized.append({
+            'rec': r,
+            'words': _normalize(r.get('summary', '')),
+            'step_type': str(r.get('step_type', '')).lower(),
+            'summary_len': len(str(r.get('summary', ''))),
+        })
+    
+    # Mark duplicates
+    keep = [True] * len(normalized)
+    
+    for i, item_i in enumerate(normalized):
+        if not keep[i]:
+            continue
+        for j, item_j in enumerate(normalized):
+            if j <= i or not keep[j]:
+                continue
+            # Only compare if same step_type
+            if item_i['step_type'] != item_j['step_type']:
+                continue
+            # Check similarity
+            sim = _similarity(item_i['words'], item_j['words'])
+            if sim > 0.7:
+                # Keep the one with longer summary (more detail)
+                if item_i['summary_len'] >= item_j['summary_len']:
+                    keep[j] = False
+                    logger.debug(
+                        "Dedup: Removing duplicate recommendation (sim=%.2f): %s",
+                        sim,
+                        str(item_j['rec'].get('summary', ''))[:60],
+                    )
+                else:
+                    keep[i] = False
+                    logger.debug(
+                        "Dedup: Removing duplicate recommendation (sim=%.2f): %s",
+                        sim,
+                        str(item_i['rec'].get('summary', ''))[:60],
+                    )
+                    break  # Stop comparing i if it's been marked for removal
+    
+    result = [normalized[i]['rec'] for i in range(len(normalized)) if keep[i]]
+    
+    if len(result) < len(recs):
+        logger.info("Deduplication: %d -> %d recommendations", len(recs), len(result))
+    
+    return result
 
 
 class OrchestratorAgent:
@@ -192,6 +290,7 @@ class OrchestratorAgent:
 
     # --- Generate upgrade recommendations ---
     def generate_recommendations(self):
+        """Generate upgrade recommendations for the audit."""
         logger.info("🧮 Generating recommendations (audit_id=%s)", self.audit_id)
         # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
         domains = ["insulation", "siding", "hvac", "interior"]
@@ -288,6 +387,33 @@ class OrchestratorAgent:
                 logger.exception("❌ %s agent failed during contextual recommendations", domain)
                 context_outputs[domain] = {}
 
+        # --- Pass 3: Energy Usage Agent (conditional) ---
+        # Only runs if utility data is connected for this audit
+        energy_usage_recs = []
+        if EnergyUsageAgent is not None:
+            try:
+                energy_context = get_energy_usage_context(self.audit_id)
+                if energy_context:
+                    logger.info("⚡ Running Energy Usage Agent (utility data connected)")
+                    energy_agent = EnergyUsageAgent()
+                    energy_output = energy_agent.analyze(energy_context)
+                    
+                    if energy_output and energy_output.recommendations:
+                        energy_usage_recs = convert_to_standard_recommendations(energy_output)
+                        logger.info(
+                            "⚡ Energy Usage Agent produced %d recommendations (confidence=%.2f)",
+                            len(energy_usage_recs),
+                            energy_output.overall_confidence,
+                        )
+                        # Tag source for these recommendations
+                        for r in energy_usage_recs:
+                            r["_source_pass"] = "energy_usage"
+                else:
+                    logger.debug("Energy Usage Agent skipped: no utility data connected")
+            except Exception:
+                logger.exception("❌ Energy Usage Agent failed")
+                energy_usage_recs = []
+
         # Merge audio-first then AI context outputs preserving order
         all_recs = []
         for domain in domains:
@@ -298,6 +424,42 @@ class OrchestratorAgent:
             for r in (context_outputs.get(domain, {}) or {}).get("recommendations", []) or []:
                 r["_source_pass"] = "ai"
                 all_recs.append(r)
+        
+        # Add energy usage recommendations (if any)
+        all_recs.extend(energy_usage_recs)
+        
+        # --- Deduplication ---
+        # Remove duplicate recommendations based on fuzzy matching of summaries.
+        # Energy usage agent may produce recommendations that overlap with domain agents
+        # (e.g., both suggest HVAC thermostat scheduling). Keep the more specific one.
+        all_recs = _deduplicate_recommendations(all_recs)
+
+        # --- Service Catalog Filter ---
+        # Filter recommendations to only include those matching the service catalog
+        # and enrich with service metadata (service_id, order_of_completion, rebate_eligible)
+        try:
+            accepted_recs, rejected_recs = filter_and_enrich_recommendations(
+                all_recs,
+                domain=None,  # No domain filter since we've merged all domains
+                confidence_threshold=0.5,
+                strict=False,
+            )
+            if rejected_recs:
+                logger.info(
+                    "Service catalog filter: %d accepted, %d rejected",
+                    len(accepted_recs),
+                    len(rejected_recs),
+                )
+                for rej in rejected_recs:
+                    logger.debug(
+                        "Rejected recommendation: %s (reason=%s)",
+                        rej.get("summary", "")[:60],
+                        rej.get("_rejection_reason", "unknown"),
+                    )
+            all_recs = accepted_recs
+        except Exception:
+            logger.exception("Service catalog filter failed; proceeding with unfiltered recommendations")
+            # Continue with original recs if filter fails
 
         # Coerce numeric fields safely
         def safe_float(val):
@@ -375,6 +537,10 @@ class OrchestratorAgent:
                 # accepting arbitrary freeform 'source' strings that agents may return
                 # (agents sometimes use `source` to cite references or URLs). Default to 'ai'.
                 source=(rec.get("_source_pass") or "ai"),
+                # Service catalog alignment fields (populated by filter)
+                service_id=rec.get("service_id"),
+                order_of_completion=rec.get("order_of_completion"),
+                rebate_eligible=rec.get("rebate_eligible"),
             )
 
             # Opportunistically persist ROI inputs for attic insulation so the UI/API
