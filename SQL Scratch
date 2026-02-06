@@ -57,6 +57,8 @@ select * from langchain_memory;
 
 select * from users;
 
+delete from users where id = '4567c9b6-d127-4ef7-8c2b-04db0a32a1f7';
+
 select * from properties;
 delete from utility_connections;
 delete from utility_usage_data;
