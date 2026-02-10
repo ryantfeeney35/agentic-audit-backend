@@ -46,7 +46,9 @@ Runtime behavior:
 Local dev
 ---------
 
-1. Ensure DATABASE_URL points to Postgres.
+1. Configure your database target:
+   - Set `DATABASE_URL` to your Postgres instance for production parity.
+   - Leave it unset to fall back to the bundled SQLite file at `instance/dev.db` (useful for running tests or migrations without Postgres).
 2. Enable flags as needed:
 
   - export MEMORY_ENABLED=true

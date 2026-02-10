@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
+import uuid
 
 db = SQLAlchemy()
 
@@ -59,6 +60,7 @@ class Audit(db.Model):
     steps = relationship("AuditStep", back_populates="audit", cascade="all, delete-orphan")
     media = relationship("AuditMedia", back_populates="audit", cascade="all, delete-orphan")
     recommendations = relationship("AuditRecommendation", back_populates="audit", cascade="all, delete-orphan")
+    room_measurements = relationship("RoomMeasurement", back_populates="audit", cascade="all, delete-orphan")
 class AuditStep(db.Model):
     __tablename__ = "audit_steps"
 
@@ -80,6 +82,8 @@ class AuditStep(db.Model):
     audit = relationship("Audit", back_populates="steps")
     # ✅ must match AuditMedia.step
     media = relationship("AuditMedia", back_populates="step", cascade="all, delete-orphan")
+    # ✅ must match RoomMeasurement.step
+    room_measurements = relationship("RoomMeasurement", back_populates="step", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class AuditMedia(db.Model):
@@ -105,6 +109,51 @@ class AuditMedia(db.Model):
     audit = relationship("Audit", back_populates="media")
     # ✅ must match AuditStep.media
     step = relationship("AuditStep", back_populates="media")
+
+
+class RoomMeasurement(db.Model):
+    __tablename__ = "room_measurements"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
+    audit_step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete="CASCADE"), nullable=False)
+    area_sqft = db.Column(db.Float, nullable=False)
+    polygon_vertices = db.Column(JSONB, nullable=False, default=list)
+    source = db.Column(db.String(20), nullable=False)
+    confidence_score = db.Column(db.Float, nullable=False)
+    quality_metadata = db.Column(JSONB, nullable=False, default=dict)
+    user_modified = db.Column(db.Boolean, nullable=False, default=False)
+    user_verified = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    audit = relationship("Audit", back_populates="room_measurements")
+    step = relationship("AuditStep", back_populates="room_measurements")
+
+    def to_dict(self):
+        vertices = []
+        for vertex in self.polygon_vertices or []:
+            if isinstance(vertex, dict):
+                vertices.append({
+                    "x_m": vertex.get("x_m") if "x_m" in vertex else vertex.get("x"),
+                    "y_m": vertex.get("y_m") if "y_m" in vertex else vertex.get("y"),
+                })
+            elif isinstance(vertex, (list, tuple)) and len(vertex) >= 2:
+                vertices.append({"x_m": vertex[0], "y_m": vertex[1]})
+        return {
+            "id": self.id,
+            "audit_id": self.audit_id,
+            "audit_step_id": self.audit_step_id,
+            "area_sqft": self.area_sqft,
+            "polygon_vertices": vertices,
+            "source": self.source,
+            "confidence_score": self.confidence_score,
+            "quality_metadata": self.quality_metadata or {},
+            "user_modified": self.user_modified,
+            "user_verified": self.user_verified,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 
 class AgentConversation(db.Model):

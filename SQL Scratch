@@ -57,6 +57,8 @@ select * from langchain_memory;
 
 select * from users;
 
+delete from users where id = '4567c9b6-d127-4ef7-8c2b-04db0a32a1f7';
+
 select * from properties;
 delete from utility_connections;
 delete from utility_usage_data;
@@ -85,3 +87,5 @@ VALUES
 ('EcoComfort Insulation', '555-987-6543', 'insulation'),
 ('Cool & Heat Solutions', '555-111-2222', 'hvac'),
 ('Shading & Awnings Co.', '555-555-1212', 'exterior');
+
+select * from room_measurements
