@@ -82,6 +82,8 @@ class AuditStep(db.Model):
     audit = relationship("Audit", back_populates="steps")
     # ✅ must match AuditMedia.step
     media = relationship("AuditMedia", back_populates="step", cascade="all, delete-orphan")
+    # ✅ must match RoomMeasurement.step
+    room_measurements = relationship("RoomMeasurement", back_populates="step", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class AuditMedia(db.Model):
@@ -126,7 +128,7 @@ class RoomMeasurement(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     audit = relationship("Audit", back_populates="room_measurements")
-    step = relationship("AuditStep", backref="room_measurements")
+    step = relationship("AuditStep", back_populates="room_measurements")
 
     def to_dict(self):
         vertices = []
