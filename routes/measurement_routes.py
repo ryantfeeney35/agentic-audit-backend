@@ -184,18 +184,37 @@ def create_room_measurement(audit_id, room_id):
     if errors:
         return jsonify({"error": "Validation failed", "details": errors}), 400
 
-    measurement = RoomMeasurement(
+    # Upsert: Check if a measurement already exists for this audit/room
+    existing = RoomMeasurement.query.filter_by(
         audit_id=audit_id,
-        room_id=normalized_room_id,
-        area_sqft=area_sqft,
-        polygon_vertices=normalized_vertices,
-        source=source,
-        confidence_score=confidence_score,
-        quality_metadata=quality_metadata,
-        user_modified=user_modified,
-        user_verified=user_verified,
-    )
-    db.session.add(measurement)
+        room_id=normalized_room_id
+    ).first()
+
+    if existing:
+        # Update the existing measurement
+        existing.area_sqft = area_sqft
+        existing.polygon_vertices = normalized_vertices
+        existing.source = source
+        existing.confidence_score = confidence_score
+        existing.quality_metadata = quality_metadata
+        existing.user_modified = user_modified
+        existing.user_verified = user_verified
+        measurement = existing
+    else:
+        # Create a new measurement
+        measurement = RoomMeasurement(
+            audit_id=audit_id,
+            room_id=normalized_room_id,
+            area_sqft=area_sqft,
+            polygon_vertices=normalized_vertices,
+            source=source,
+            confidence_score=confidence_score,
+            quality_metadata=quality_metadata,
+            user_modified=user_modified,
+            user_verified=user_verified,
+        )
+        db.session.add(measurement)
+    
     db.session.commit()
 
     return jsonify({"measurement": measurement.to_dict()}), 201
