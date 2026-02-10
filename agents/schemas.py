@@ -1,7 +1,7 @@
 # agents/schemas.py
 from enum import Enum
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Any
 
 class StepType(str, Enum):
     EXTERIOR = "Exterior"
@@ -185,11 +185,34 @@ class HVACSchema(BaseModel):
 
 class InsulationSchema(BaseModel):
     insulation_type: str
-    thickness_inches: Optional[float]
+    thickness_inches: Optional[float] = Field(
+        default=None,
+        description="Estimated insulation thickness in inches, or null if not determinable",
+    )
     condition: str
     issues: List[str] = Field(default_factory=list)
     recommended_upgrades: List[str] = Field(default_factory=list)
     summary: str
+
+    @field_validator("thickness_inches", mode="before")
+    @classmethod
+    def convert_unknown_to_none(cls, v: Any) -> Optional[float]:
+        """Convert 'unknown' or other non-numeric strings to None."""
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            # Handle "unknown", "n/a", "not visible", etc.
+            v_lower = v.lower().strip()
+            if v_lower in ("unknown", "n/a", "na", "none", "not visible", "not determinable", ""):
+                return None
+            # Try to parse as float
+            try:
+                return float(v)
+            except ValueError:
+                return None
+        return None
 
 class InterviewSchema(BaseModel):
     transcript: str
