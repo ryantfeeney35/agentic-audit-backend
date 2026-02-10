@@ -104,9 +104,9 @@ def _parse_area_sqft(payload):
     raise KeyError("area_sqft")
 
 
-@bp.route('/audits/<int:audit_id>/rooms/<string:room_id>/measurements', methods=['POST'])
+@bp.route('/audits/<int:audit_id>/steps/<int:step_id>/measurements', methods=['POST'])
 @require_auth
-def create_room_measurement(audit_id, room_id):
+def create_room_measurement(audit_id, step_id):
     """
     POST /api/audits/<audit_id>/rooms/<room_id>/measurements
 
@@ -173,9 +173,8 @@ def create_room_measurement(audit_id, room_id):
     if source in {'arkit', 'arcore'} and len(normalized_vertices) < 3:
         errors.append("At least three vertices are required for AR-based scans")
 
-    normalized_room_id = room_id.strip()
-    if not normalized_room_id:
-        errors.append("room_id path parameter cannot be empty")
+    if step_id <= 0:
+        errors.append("step_id must be a positive integer")
 
     quality_metadata = _extract_quality_metadata(payload)
     user_modified = _parse_bool(payload, 'user_modified', fallback_key='userModified', default=False)
@@ -184,10 +183,10 @@ def create_room_measurement(audit_id, room_id):
     if errors:
         return jsonify({"error": "Validation failed", "details": errors}), 400
 
-    # Upsert: Check if a measurement already exists for this audit/room
+    # Upsert: Check if a measurement already exists for this audit/step
     existing = RoomMeasurement.query.filter_by(
         audit_id=audit_id,
-        room_id=normalized_room_id
+        audit_step_id=step_id
     ).first()
 
     if existing:
@@ -204,7 +203,7 @@ def create_room_measurement(audit_id, room_id):
         # Create a new measurement
         measurement = RoomMeasurement(
             audit_id=audit_id,
-            room_id=normalized_room_id,
+            audit_step_id=step_id,
             area_sqft=area_sqft,
             polygon_vertices=normalized_vertices,
             source=source,
@@ -220,9 +219,9 @@ def create_room_measurement(audit_id, room_id):
     return jsonify({"measurement": measurement.to_dict()}), 201
 
 
-@bp.route('/audits/<int:audit_id>/rooms/<string:room_id>/measurements/latest', methods=['GET'])
+@bp.route('/audits/<int:audit_id>/steps/<int:step_id>/measurements/latest', methods=['GET'])
 @require_auth
-def get_latest_room_measurement(audit_id, room_id):
+def get_latest_room_measurement(audit_id, step_id):
     """
     GET /api/audits/<audit_id>/rooms/<room_id>/measurements/latest
 
@@ -239,17 +238,15 @@ def get_latest_room_measurement(audit_id, room_id):
     if error_response:
         return error_response
 
-    normalized_room_id = room_id.strip()
-
     measurement = (
         RoomMeasurement.query
-        .filter_by(audit_id=audit_id, room_id=normalized_room_id)
+        .filter_by(audit_id=audit_id, audit_step_id=step_id)
         .order_by(RoomMeasurement.created_at.desc(), RoomMeasurement.updated_at.desc())
         .first()
     )
 
     if not measurement:
-        return jsonify({"error": "No measurements found for room"}), 404
+        return jsonify({"error": "No measurements found for step"}), 404
 
     return jsonify({"measurement": measurement.to_dict()}), 200
 
@@ -293,10 +290,10 @@ def get_measurement_summary(audit_id):
         .all()
     )
 
-    latest_by_room = {}
+    latest_by_step = {}
     for measurement in measurements:
-        if measurement.room_id not in latest_by_room:
-            latest_by_room[measurement.room_id] = measurement
+        if measurement.audit_step_id not in latest_by_step:
+            latest_by_step[measurement.audit_step_id] = measurement
 
     rooms_payload = []
     total_area = 0.0
@@ -305,9 +302,9 @@ def get_measurement_summary(audit_id):
     confidence_scores = []
     latest_timestamp = None
 
-    for room, measurement in sorted(latest_by_room.items()):
+    for step_id, measurement in sorted(latest_by_step.items()):
         rooms_payload.append({
-            "room_id": room,
+            "audit_step_id": step_id,
             "latest_measurement": measurement.to_dict(),
         })
         total_area += measurement.area_sqft or 0
@@ -325,7 +322,7 @@ def get_measurement_summary(audit_id):
         "audit_id": audit_id,
         "rooms": rooms_payload,
         "totals": {
-            "rooms": len(latest_by_room),
+            "rooms": len(latest_by_step),
             "measured_area_sqft": round(total_area, 2),
             "verified_rooms": verified_count,
             "manual_entries": manual_count,

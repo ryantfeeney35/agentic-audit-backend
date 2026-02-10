@@ -114,7 +114,7 @@ class RoomMeasurement(db.Model):
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     audit_id = db.Column(db.Integer, db.ForeignKey('audits.id', ondelete="CASCADE"), nullable=False)
-    room_id = db.Column(db.String(64), nullable=False)
+    audit_step_id = db.Column(db.Integer, db.ForeignKey('audit_steps.id', ondelete="CASCADE"), nullable=False)
     area_sqft = db.Column(db.Float, nullable=False)
     polygon_vertices = db.Column(JSONB, nullable=False, default=list)
     source = db.Column(db.String(20), nullable=False)
@@ -126,6 +126,7 @@ class RoomMeasurement(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     audit = relationship("Audit", back_populates="room_measurements")
+    step = relationship("AuditStep", backref="room_measurements")
 
     def to_dict(self):
         vertices = []
@@ -140,7 +141,7 @@ class RoomMeasurement(db.Model):
         return {
             "id": self.id,
             "audit_id": self.audit_id,
-            "room_id": self.room_id,
+            "audit_step_id": self.audit_step_id,
             "area_sqft": self.area_sqft,
             "polygon_vertices": vertices,
             "source": self.source,
