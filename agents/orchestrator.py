@@ -461,6 +461,55 @@ class OrchestratorAgent:
             logger.exception("Service catalog filter failed; proceeding with unfiltered recommendations")
             # Continue with original recs if filter fails
 
+        # --- ROI Enrichment (deterministic) ---
+        # Apply ROI calculations for insulation recommendations before saving.
+        # Build context for ROI enrichment with property sqft and audit defaults.
+        from .roi import enrich_recommendations_with_roi
+        from .schemas import Recommendation
+        
+        roi_context = {
+            "property_sqft": property_sqft,
+            "energy_rate_usd_per_kwh": roi_defaults.get("energy_rate_usd_per_kwh", 0.20),
+            "analysis_horizon_years": roi_defaults.get("analysis_horizon_years", 25),
+            "climate": roi_defaults.get("climate", "mild"),
+        }
+        
+        try:
+            # Convert dicts to Recommendation models for ROI enrichment
+            insulation_recs = []
+            other_recs = []
+            for rec in all_recs:
+                step_type_str = (rec.get("step_type") or "").lower()
+                if step_type_str == "insulation":
+                    try:
+                        # Ensure step_type is properly formatted for Pydantic
+                        rec_copy = {**rec, "step_type": "Insulation"}
+                        insulation_recs.append(Recommendation(**rec_copy))
+                    except Exception as e:
+                        logger.warning("Failed to convert rec to Recommendation: %s", e)
+                        other_recs.append(rec)
+                else:
+                    other_recs.append(rec)
+            
+            if insulation_recs:
+                logger.info(
+                    "🔄 ROI enrichment (orchestrator): %d insulation recs, context_keys=%s",
+                    len(insulation_recs), list(roi_context.keys())
+                )
+                enriched_recs = enrich_recommendations_with_roi(
+                    StepType.INSULATION, insulation_recs, roi_context
+                )
+                
+                # Convert back to dicts and merge with other_recs
+                enriched_dicts = [r.model_dump() for r in enriched_recs]
+                roi_count = sum(1 for r in enriched_dicts if r.get("annual_savings_usd") is not None)
+                logger.info("🔄 ROI enrichment complete: %d/%d recs have ROI", roi_count, len(enriched_dicts))
+                
+                all_recs = enriched_dicts + other_recs
+        except Exception as e:
+            logger.warning("⚠️ ROI enrichment in orchestrator failed: %s", e, exc_info=True)
+            # Continue with original recs if enrichment fails
+
         # Coerce numeric fields safely
         def safe_float(val):
             try:
