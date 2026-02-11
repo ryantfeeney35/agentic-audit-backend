@@ -533,14 +533,22 @@ def run_agent(
                 except Exception:
                     step_domain = None
 
-                if step_domain is not None:
+                if step_domain is not None and parsed.recommendations:
                     ctx_obj = context if isinstance(context, dict) else {}
+                    logger.info(
+                        "🔄 ROI enrichment: domain=%s, recs=%d, context_keys=%s",
+                        step_domain, len(parsed.recommendations), list(ctx_obj.keys())
+                    )
 
                     enriched = enrich_recommendations_with_roi(step_domain, parsed.recommendations, ctx_obj)
                     parsed.recommendations = enriched
-        except Exception:
+                    
+                    # Log if any recs got ROI populated
+                    roi_count = sum(1 for r in enriched if r.annual_savings_usd is not None)
+                    logger.info("🔄 ROI enrichment complete: %d/%d recs have ROI", roi_count, len(enriched))
+        except Exception as e:
             # Do not let enrichment failures break the primary agent flow.
-            logger.debug("ROI enrichment skipped due to error", exc_info=True)
+            logger.warning("⚠️ ROI enrichment failed: %s", e, exc_info=True)
 
         return parsed.model_dump()
     except Exception as e:

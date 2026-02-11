@@ -83,6 +83,11 @@ def enrich_recommendations_with_roi(domain: "StepType", recs: list["Recommendati
 def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recommendation]:
     out: List[Recommendation] = []
 
+    logger.info(
+        "🧮 _enrich_insulation called: recs=%d, context_keys=%s",
+        len(recs), list(context.keys())
+    )
+
     # Property sqft for fallback calculations
     property_sqft = None
     try:
@@ -106,6 +111,11 @@ def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recomm
             # Default fraction documented: 35% of total property sqft attributed to attic area
             area_sqft = round(property_sqft * 0.35, 2)
 
+    logger.info(
+        "🧮 ROI inputs: area_sqft=%s, property_sqft=%s",
+        area_sqft, property_sqft
+    )
+
     # Determine R-values
     current_r_value = context.get("attic_current_r", 13)
     target_r_value = context.get("attic_target_r", 38)
@@ -127,17 +137,26 @@ def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recomm
         summary_lc = (r.summary or "").lower()
         source_lc = (r.source or "").lower()
         is_attic = ("attic" in summary_lc) or ("attic" in source_lc)
+        
+        logger.info(
+            "🧮 Processing rec: step_type=%s, is_attic=%s, summary='%s...'",
+            r.step_type, is_attic, (r.summary or "")[:50]
+        )
+        
         if r.step_type != StepType.INSULATION or not is_attic:
+            logger.info("🧮 Skipping: not attic insulation (step_type=%s, is_attic=%s)", r.step_type, is_attic)
             out.append(new_r)
             continue
 
         # Guard: require area and current R; target defaults to 38 if not provided
         local_area = area_sqft
         if local_area is None:
+            logger.info("🧮 Skipping: missing area_sqft")
             out.append(new_r)  # ROI skipped: missing area.
             continue
 
         if current_r_value is None:
+            logger.info("🧮 Skipping: missing current_r_value")
             out.append(new_r)  # ROI skipped: missing current R.
             continue
 
@@ -148,6 +167,7 @@ def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recomm
             if m:
                 try:
                     local_cost = float(m.group(1).replace(",", ""))
+                    logger.info("🧮 Parsed cost from summary: $%.2f", local_cost)
                 except Exception:
                     local_cost = None
         
