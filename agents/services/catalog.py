@@ -20,6 +20,53 @@ logger = logging.getLogger(__name__)
 DEFAULT_CATALOG_PATH = Path(__file__).parent.parent.parent / "data" / "service_catalog.json"
 
 
+class CostFormula(BaseModel):
+    """Formula for calculating estimated cost based on square footage or other inputs."""
+
+    type: str = Field(
+        default="per_sqft",
+        description="Formula type: 'per_sqft' calculates cost = base_cost_per_sqft * area",
+    )
+    base_cost_per_sqft: float = Field(
+        ..., gt=0, description="Cost per square foot for the upgrade"
+    )
+    min_cost: Optional[float] = Field(
+        default=None, description="Minimum cost floor (e.g., minimum service charge)"
+    )
+    max_cost: Optional[float] = Field(
+        default=None, description="Maximum cost cap for reasonableness"
+    )
+    sqft_multiplier: Optional[float] = Field(
+        default=None,
+        description="Multiplier to convert property sqft to applicable area (e.g., 0.35 for attic = 35% of property)",
+    )
+    notes: Optional[str] = Field(
+        default=None, description="Human-readable notes about the formula assumptions"
+    )
+
+    def calculate(self, area_sqft: float) -> float:
+        """Calculate estimated cost from area.
+        
+        Args:
+            area_sqft: The applicable area in square feet (already adjusted if needed).
+            
+        Returns:
+            Estimated cost in USD, clamped to min/max bounds.
+        """
+        if self.type != "per_sqft":
+            raise ValueError(f"Unknown cost formula type: {self.type}")
+        
+        raw_cost = self.base_cost_per_sqft * area_sqft
+        
+        # Apply min/max bounds
+        if self.min_cost is not None:
+            raw_cost = max(raw_cost, self.min_cost)
+        if self.max_cost is not None:
+            raw_cost = min(raw_cost, self.max_cost)
+        
+        return round(raw_cost, 2)
+
+
 class ServiceEntry(BaseModel):
     """A single service offered by the company."""
 
@@ -33,13 +80,40 @@ class ServiceEntry(BaseModel):
     order_of_completion: int = Field(
         ..., ge=1, le=10, description="Priority order for work sequencing (lower = do first)"
     )
-    estimated_cost_usd: Optional[float] = Field(default=None, description="Estimated cost in USD")
+    estimated_cost_usd: Optional[float] = Field(default=None, description="Estimated cost in USD (static fallback)")
+    cost_formula: Optional[CostFormula] = Field(
+        default=None, description="Formula for calculating cost from square footage"
+    )
     estimated_kwh_savings: Optional[float] = Field(default=None, description="Estimated annual kWh savings")
     rebate_eligible: bool = Field(default=False, description="Whether this service qualifies for rebates")
     keywords: List[str] = Field(
         default_factory=list,
         description="Keywords for matching recommendation text to this service",
     )
+
+    def calculate_cost(self, area_sqft: Optional[float] = None, property_sqft: Optional[float] = None) -> Optional[float]:
+        """Calculate estimated cost using formula or fallback to static value.
+        
+        Args:
+            area_sqft: Direct area to use for calculation.
+            property_sqft: Property total sqft (used with sqft_multiplier if area_sqft not provided).
+            
+        Returns:
+            Estimated cost in USD, or None if cannot be calculated.
+        """
+        # Try formula-based calculation first
+        if self.cost_formula is not None:
+            calc_area = area_sqft
+            # If no direct area, derive from property sqft using multiplier
+            if calc_area is None and property_sqft is not None:
+                multiplier = self.cost_formula.sqft_multiplier or 1.0
+                calc_area = property_sqft * multiplier
+            
+            if calc_area is not None and calc_area > 0:
+                return self.cost_formula.calculate(calc_area)
+        
+        # Fallback to static estimated_cost_usd
+        return self.estimated_cost_usd
 
     @property
     def display_name(self) -> str:

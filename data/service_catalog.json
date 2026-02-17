@@ -10,6 +10,13 @@
       "action": "Install",
       "order_of_completion": 4,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "per_sqft",
+        "base_cost_per_sqft": 1.50,
+        "min_cost": 500,
+        "max_cost": 5000,
+        "notes": "Blown-in fiberglass or cellulose to R-38. Cost varies by material and accessibility."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["attic insulation", "install attic", "add attic insulation", "attic insulation installation"]
@@ -22,6 +29,13 @@
       "action": "Replace",
       "order_of_completion": 4,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "per_sqft",
+        "base_cost_per_sqft": 2.25,
+        "min_cost": 800,
+        "max_cost": 7500,
+        "notes": "Includes removal of old insulation plus new blown-in to R-38. Higher cost due to disposal."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["replace attic insulation", "upgrade attic insulation", "attic insulation replacement"]
@@ -34,6 +48,14 @@
       "action": "Install",
       "order_of_completion": 4,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "per_sqft",
+        "base_cost_per_sqft": 2.50,
+        "min_cost": 1500,
+        "max_cost": 8000,
+        "sqft_multiplier": 0.40,
+        "notes": "Blown-in wall insulation. sqft_multiplier converts property sqft to estimated wall area."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["wall insulation", "install wall insulation", "add wall insulation", "blow-in wall"]
@@ -46,6 +68,14 @@
       "action": "Install",
       "order_of_completion": 4,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "per_sqft",
+        "base_cost_per_sqft": 2.00,
+        "min_cost": 800,
+        "max_cost": 5000,
+        "sqft_multiplier": 0.50,
+        "notes": "Batt or spray foam under floor joists. sqft_multiplier: crawlspace typically 50% of footprint for single-story."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["crawlspace insulation", "crawl space insulation", "install crawlspace", "underfloor insulation"]
@@ -58,6 +88,14 @@
       "action": "Replace",
       "order_of_completion": 4,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "per_sqft",
+        "base_cost_per_sqft": 2.75,
+        "min_cost": 1200,
+        "max_cost": 6500,
+        "sqft_multiplier": 0.50,
+        "notes": "Includes removal and disposal of old insulation plus new install."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["replace crawlspace insulation", "crawlspace insulation replacement"]

@@ -151,8 +151,24 @@ def run_agent(
                 "- Identify system type(s) (e.g., gas furnace, condenser, heat pump) based only on visible data plates\n"
                 "  or obvious physical characteristics.\n"
                 "- Extract brand, model, and labeled efficiency ratings when clearly visible.\n"
-                "- Assess ducting ONLY based on what is visible: presence of duct tape, suspected asbestos wrap,\n"
-                "  visible kinks, disconnections, or lack of insulation. If not clearly visible, mark as unknown.\n"
+                "\n"
+                "DUCTING ASSESSMENT - Look for these specific deficiencies:\n"
+                "- Ducts strapped or attached directly to the roof deck (exposes ducts to extreme temperature swings,\n"
+                "  causing significant energy loss - this is a deficiency even if duct appears intact)\n"
+                "- Ducts laying on attic floor or draped over framing (improper support causes kinks and restrictions)\n"
+                "- Crushed, kinked, or severely bent ducts (restricts airflow)\n"
+                "- Disconnected or separated duct sections (air leakage)\n"
+                "- Torn, damaged, or missing outer jacket/insulation on flex ducts\n"
+                "- Deteriorated or peeling duct tape at connections (indicates aging/failing seals)\n"
+                "- Visible gaps at duct connections or plenums\n"
+                "- Ducts running through unconditioned spaces without adequate insulation\n"
+                "- Excessively long duct runs with multiple bends\n"
+                "- Suspected asbestos wrap (white cloth-like wrap on older systems)\n"
+                "- Sagging ducts without proper support straps\n"
+                "- Metal ducts with visible rust or corrosion\n"
+                "If any of these deficiencies are visible, flag them in ducting_condition and/or recommended_upgrades.\n"
+                "If ducting issues are not clearly visible, mark ducting_condition as 'unknown'.\n"
+                "\n"
                 "- Flag obvious safety/efficiency issues that are clearly supported by the photos (e.g., deteriorated\n"
                 "  duct tape, disconnected ducts, severe rust, missing covers).\n"
                 "- If your schema includes a recommendation field, ONLY recommend actions that directly address\n"
@@ -517,14 +533,22 @@ def run_agent(
                 except Exception:
                     step_domain = None
 
-                if step_domain is not None:
+                if step_domain is not None and parsed.recommendations:
                     ctx_obj = context if isinstance(context, dict) else {}
+                    logger.info(
+                        "🔄 ROI enrichment: domain=%s, recs=%d, context_keys=%s",
+                        step_domain, len(parsed.recommendations), list(ctx_obj.keys())
+                    )
 
                     enriched = enrich_recommendations_with_roi(step_domain, parsed.recommendations, ctx_obj)
                     parsed.recommendations = enriched
-        except Exception:
+                    
+                    # Log if any recs got ROI populated
+                    roi_count = sum(1 for r in enriched if r.annual_savings_usd is not None)
+                    logger.info("🔄 ROI enrichment complete: %d/%d recs have ROI", roi_count, len(enriched))
+        except Exception as e:
             # Do not let enrichment failures break the primary agent flow.
-            logger.debug("ROI enrichment skipped due to error", exc_info=True)
+            logger.warning("⚠️ ROI enrichment failed: %s", e, exc_info=True)
 
         return parsed.model_dump()
     except Exception as e:

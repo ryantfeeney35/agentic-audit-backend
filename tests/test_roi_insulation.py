@@ -1,4 +1,6 @@
 import math
+import pytest
+from pydantic import ValidationError
 from agents.roi import (
     calculate_attic_insulation_roi,
     AtticInsulationROIInput,
@@ -27,8 +29,8 @@ def test_roi_insulation_example():
 
 
 def test_roi_insulation_edge_cases():
-    # AREA_ZERO
-    res = calculate_attic_insulation_roi(
+    # AREA_ZERO - Pydantic validates area_sqft > 0
+    with pytest.raises(ValidationError) as exc_info:
         AtticInsulationROIInput(
             area_sqft=0,
             current_r_value=13,
@@ -36,12 +38,9 @@ def test_roi_insulation_edge_cases():
             energy_rate_usd_per_kwh=0.20,
             net_upgrade_cost_usd=2500,
         )
-    )
-    assert res.error is not None
-    assert res.annual_savings_usd == 0
-    assert res.annual_kwh_saved == 0
+    assert "area_sqft" in str(exc_info.value)
 
-    # R_NO_IMPROVEMENT
+    # R_NO_IMPROVEMENT - valid input but no R improvement yields zero savings with error
     res = calculate_attic_insulation_roi(
         AtticInsulationROIInput(
             area_sqft=1200,
@@ -55,8 +54,8 @@ def test_roi_insulation_edge_cases():
     assert res.annual_savings_usd == 0
     assert res.annual_kwh_saved == 0
 
-    # COST_ZERO
-    res = calculate_attic_insulation_roi(
+    # COST_ZERO - Pydantic validates net_upgrade_cost_usd > 0
+    with pytest.raises(ValidationError) as exc_info:
         AtticInsulationROIInput(
             area_sqft=1200,
             current_r_value=13,
@@ -64,13 +63,10 @@ def test_roi_insulation_edge_cases():
             energy_rate_usd_per_kwh=0.20,
             net_upgrade_cost_usd=0,
         )
-    )
-    assert res.error is not None
-    assert res.annual_savings_usd == 0
-    assert res.annual_kwh_saved == 0
+    assert "net_upgrade_cost_usd" in str(exc_info.value)
 
-    # RATE_ZERO
-    res = calculate_attic_insulation_roi(
+    # RATE_ZERO - Pydantic validates energy_rate_usd_per_kwh > 0
+    with pytest.raises(ValidationError) as exc_info:
         AtticInsulationROIInput(
             area_sqft=1200,
             current_r_value=13,
@@ -78,7 +74,4 @@ def test_roi_insulation_edge_cases():
             energy_rate_usd_per_kwh=0.0,
             net_upgrade_cost_usd=2500,
         )
-    )
-    assert res.error is not None
-    assert res.annual_savings_usd == 0
-    assert res.annual_kwh_saved == 0
+    assert "energy_rate_usd_per_kwh" in str(exc_info.value)
