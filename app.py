@@ -1,7 +1,10 @@
 import os
+import logging
 from typing import Optional, Dict
 
-from flask import Flask
+import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_migrate import Migrate
 from dotenv import load_dotenv
@@ -11,6 +14,37 @@ from routes import register_blueprints
 
 load_dotenv()
 migrate = Migrate()
+
+# Initialize Sentry before Flask app creation
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[FlaskIntegration()],
+        traces_sample_rate=0.1,  # 10% of transactions for performance monitoring
+        send_default_pii=False,  # Don't send PII by default
+        before_send=lambda event, hint: _scrub_pii(event),
+    )
+
+
+def _scrub_pii(event: dict) -> dict:
+    """Scrub PII from Sentry events before sending."""
+    # Scrub sensitive headers
+    if "request" in event and "headers" in event["request"]:
+        sensitive_headers = ["authorization", "cookie", "x-auth-token"]
+        for header in sensitive_headers:
+            if header in event["request"]["headers"]:
+                event["request"]["headers"][header] = "[Filtered]"
+    
+    # Scrub email patterns from exception values
+    if "exception" in event and "values" in event["exception"]:
+        import re
+        email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+        for exc in event["exception"]["values"]:
+            if "value" in exc and exc["value"]:
+                exc["value"] = email_pattern.sub("[email]", str(exc["value"]))
+    
+    return event
 
 
 def _normalize_database_url(url: Optional[str]) -> Optional[str]:
@@ -80,6 +114,20 @@ def create_app(test_config: Optional[Dict] = None) -> Flask:
             db.session.remove()
         except Exception:
             pass
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        """Global exception handler - logs and reports all unhandled exceptions."""
+        # Log the full traceback
+        logging.exception("Unhandled exception occurred")
+        
+        # Sentry will automatically capture this via Flask integration
+        # but we can also explicitly capture if needed
+        if sentry_dsn:
+            sentry_sdk.capture_exception(e)
+        
+        # Return JSON error response
+        return jsonify({"error": "Internal server error"}), 500
 
     return app
 

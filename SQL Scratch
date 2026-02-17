@@ -93,3 +93,7 @@ select * from audits where property_id = 69
 select * from room_measurements;
 select * from audit_steps
 select * from audit_room
+
+delete from users where id = 'f7c66593-dab8-4990-81ed-cd714dbe1430'
+
+select * from audit_recommendations
