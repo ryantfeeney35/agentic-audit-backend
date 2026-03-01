@@ -424,13 +424,26 @@ class UtilityAPIProvider(UtilityProvider):
                         logger.warning(f"Failed to parse interval timestamps: {e}")
                         continue
                     
+                    # Get value and handle unit conversion
+                    raw_value = interval.get('value', 0)
+                    unit = interval.get('unit', 'kWh').lower()
+                    
+                    # Convert to kWh if necessary
+                    if unit in ('wh', 'watthour', 'watthours', 'watt-hour', 'watt-hours'):
+                        usage_kwh = raw_value / 1000.0
+                    elif unit in ('mwh', 'megawatthour', 'megawatthours'):
+                        usage_kwh = raw_value * 1000.0
+                    else:
+                        # Assume kWh (most common)
+                        usage_kwh = raw_value
+                    
                     interval_record = UtilityIntervalData(
                         user_id=connection.user_id,
                         audit_id=connection.audit_id,
                         connection_id=connection.id,
                         interval_start=interval_start,
                         interval_end=interval_end,
-                        usage_kwh=interval.get('value', 0),
+                        usage_kwh=usage_kwh,
                         interval_uid=interval_uid,
                     )
                     db.session.add(interval_record)

@@ -44,6 +44,10 @@ BATTERY_SIZES_KWH = [0, 5, 10, 15, 20, 25, 30]  # 7 options
 # Minimum IRR threshold for cash recommendations (investments should beat market returns)
 MIN_IRR_THRESHOLD = 5.0
 
+# Maximum system size as multiple of consumption (utility interconnection limits)
+MAX_OFFSET_MULTIPLE = 1.5  # 150% of annual consumption
+DEFAULT_PRODUCTION_KWH_PER_KW = 1600  # Annual production per kW if PVWatts fails
+
 # Minimum data coverage for optimization
 MIN_DATA_DAYS = 30
 
@@ -461,6 +465,10 @@ class OptimizationResult:
     runtime_seconds: float = 0.0
     paths_aligned: bool = False
     
+    # Sizing constraints
+    annualized_consumption_kwh: float = 0.0
+    max_system_size_kw: float = 0.0
+    
     # Data quality
     data_coverage_days: int = 0
     data_confidence: float = 0.0
@@ -536,6 +544,33 @@ def optimize_solar_system(
     # Interpolate to 15-minute intervals
     pv_profile_15min = interpolate_to_15min(hourly_profile)
     
+    # Calculate annual consumption to cap system size
+    # Extrapolate to full year if partial data
+    total_consumption_kwh = float(np.sum(consumption_intervals))
+    annualized_consumption_kwh = total_consumption_kwh * (365 / data_days) if data_days < 365 else total_consumption_kwh
+    
+    # Calculate production per kW from PVWatts profile (or use default)
+    production_per_kw = float(np.sum(pv_profile_15min))
+    if production_per_kw <= 0:
+        production_per_kw = DEFAULT_PRODUCTION_KWH_PER_KW
+    
+    # Calculate max system size for ~100% offset, then allow up to 150%
+    system_size_100_pct = annualized_consumption_kwh / production_per_kw
+    max_system_size_kw = system_size_100_pct * MAX_OFFSET_MULTIPLE
+    
+    # Filter PV sizes to respect utility interconnection limits
+    capped_pv_sizes = [size for size in pv_sizes if size <= max_system_size_kw]
+    if not capped_pv_sizes:
+        # Ensure at least one size is available
+        capped_pv_sizes = [min(pv_sizes)]
+    
+    logger.info(
+        f"⚡ Solar sizing: annual consumption={annualized_consumption_kwh:.0f} kWh, "
+        f"production/kW={production_per_kw:.0f} kWh, "
+        f"100% offset={system_size_100_pct:.1f} kW, max={max_system_size_kw:.1f} kW, "
+        f"evaluating PV sizes: {capped_pv_sizes}"
+    )
+    
     # Track best configurations
     # For Cash: maximize annual savings (with minimum IRR threshold)
     # For PPA: minimize total annual cost
@@ -549,8 +584,8 @@ def optimize_solar_system(
     # Import financial functions
     from .financial import calculate_cash_path, calculate_ppa_path
     
-    # Grid search
-    for pv_kw in pv_sizes:
+    # Grid search (using capped PV sizes)
+    for pv_kw in capped_pv_sizes:
         # Scale PV profile to this size
         pv_production = scale_profile_to_system_size(pv_profile_15min, pv_kw)
         
@@ -621,6 +656,8 @@ def optimize_solar_system(
     # Finalize result
     result.configurations_evaluated = configs_evaluated
     result.runtime_seconds = time.time() - start_time
+    result.annualized_consumption_kwh = annualized_consumption_kwh
+    result.max_system_size_kw = max_system_size_kw
     
     # Only include valid results (positive savings and above minimum IRR)
     if best_cash_config and best_cash_config["irr_percent"] > MIN_IRR_THRESHOLD:
