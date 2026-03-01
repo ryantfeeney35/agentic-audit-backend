@@ -2,7 +2,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from collections import defaultdict
-from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary, UtilityIntervalData
+from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary, UtilityIntervalData, db
 from memory.config import memory_enabled, semantic_enabled, semantic_top_k, context_char_cap
 from memory.semantic import retrieve_relevant_snippets
 from memory.chat_memory import get_recent_messages
@@ -250,11 +250,25 @@ def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput
     Returns:
         EnergyUsageAnalysisInput if utility data is connected, None otherwise.
     """
+    # Ensure clean transaction state before DB queries
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+        
     # Check for connected utility data
-    connection = UtilityConnection.query.filter_by(
-        audit_id=audit_id,
-        status='connected'
-    ).first()
+    try:
+        connection = UtilityConnection.query.filter_by(
+            audit_id=audit_id,
+            status='connected'
+        ).first()
+    except Exception as e:
+        logger.warning("Failed to query utility connection: %s", e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return None
     
     if not connection:
         return None

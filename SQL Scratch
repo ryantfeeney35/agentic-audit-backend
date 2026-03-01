@@ -63,16 +63,18 @@ select * from properties;
 delete from utility_connections;
 delete from utility_usage_data;
 delete from utility_usage_summaries;
-delete from audits where property_id = 67 and id != 48
+delete from audits where property_id = 71 and id != 48
 delete from audits where property_id = 37 and id != 22
 delete from audits where property_id = 62 and id != 40
 
 select * from utility_usage_summaries
-select * from audits where property_id = 37 order by created_at
+select * from audits where property_id = 71 order by created_at
 select * from audit_steps where audit_id = 22 and step_type = 'interview' order by created_at
 select * from properties where id = 62
 select * from Utility_Connections;
+update Utility_Connections set audit_id = 102 where id = 14;
 select * from utility_usage_data
+update utility_usage_data set audit_id = 102 where connection_id = 14;
 
 update properties set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where id = 27;
 UPDATE audits set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where property_id = 27;
@@ -80,6 +82,10 @@ update audit_steps set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where au
 update audit_media set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
 update audit_recommendations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
 update agent_conversations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
+
+select * from utility_usage_summaries
+update utility_usage_summaries set audit_id = 102 where connection_id = 14;
+select * from utility_interval_data
 
 INSERT INTO contractors (name, contact, step_type)
 VALUES 

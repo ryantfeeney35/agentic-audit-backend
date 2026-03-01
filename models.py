@@ -2,8 +2,12 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB   # ✅ PostgreSQL JSONB
+from sqlalchemy.types import JSON
 import uuid
+
+# Cross-database JSON type: JSONB on PostgreSQL, JSON on SQLite/others
+JSONB = JSON().with_variant(PG_JSONB, 'postgresql')
 
 db = SQLAlchemy()
 
@@ -448,3 +452,53 @@ class UtilityUsageSummary(db.Model):
             "tou_data": self.tou_data,
             "data_quality_flags": self.data_quality_flags,
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Solar Simulation Cache Models
+# ──────────────────────────────────────────────────────────────────────────────
+
+class PVWattsCache(db.Model):
+    """
+    Cache for PVWatts API responses.
+    
+    Stores hourly production profiles (8760 values) by zip code and parameters
+    to minimize repeated API calls. Profiles expire after 30 days.
+    """
+    __tablename__ = "pvwatts_cache"
+
+    id = db.Column(db.Integer, primary_key=True)
+    zip_code = db.Column(db.String(10), nullable=False, index=True)
+    params_hash = db.Column(db.String(32), nullable=False)  # MD5 of tilt|azimuth|etc
+    hourly_profile = db.Column(db.Text, nullable=False)  # JSON array of 8760 floats
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    __table_args__ = (
+        db.Index('ix_pvwatts_cache_zip_hash', 'zip_code', 'params_hash'),
+    )
+
+
+class ExportRateSchedule(db.Model):
+    """
+    NEM 3.0 / SBP export rate schedules by utility.
+    
+    Stores time-varying export compensation rates for solar exports.
+    Rates vary by month, hour, and day type (weekday/weekend).
+    """
+    __tablename__ = "export_rate_schedules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    utility = db.Column(db.String(20), nullable=False)  # e.g., 'SDGE', 'PGE', 'SCE'
+    effective_date = db.Column(db.Date, nullable=False)
+    
+    # Rate schedule as JSON: {"rates": {"M-H-W": rate, ...}} where M=month, H=hour, W=0/1
+    # e.g., {"rates": {"1-0-0": 0.045, "1-0-1": 0.040, ...}}
+    schedule_data = db.Column(JSONB, nullable=False)
+    
+    # Metadata
+    description = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        db.Index('ix_export_rate_utility_date', 'utility', 'effective_date'),
+    )

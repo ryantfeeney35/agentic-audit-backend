@@ -10,9 +10,13 @@ grounded in actual utility data or observed equipment conditions.
 
 import logging
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
+
+if TYPE_CHECKING:
+    from .schemas import SolarSizingOutput
+    from .roi.solar import SolarROIOutput
 
 from .schemas import (
     EnergyUsageAnalysisInput,
@@ -22,12 +26,241 @@ from .schemas import (
     EnergyUsageFindingCategory,
     RecommendationType,
     StepType,
+    SolarSizingInput,
 )
 
 logger = logging.getLogger(__name__)
 
 # Use same LLM config as other agents
 llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
+
+# Solar recommendation constants
+MIN_ANNUAL_KWH_FOR_SOLAR = 3000
+SOLAR_SERVICE_ID = "electrical-solar-installation"
+
+
+def _check_solar_trigger_conditions(
+    context: EnergyUsageAnalysisInput,
+    interval_count: int,
+    property_zip: Optional[str] = None,
+) -> bool:
+    """
+    Check if solar recommendation should be generated.
+    
+    Conditions (all must be true):
+    1. Interval data exists (interval_count > 0)
+    2. No existing solar (solar_info.has_solar is False or None)
+    3. Property is in California (zip starts with "9")
+    4. Annual consumption > 3,000 kWh
+    
+    Args:
+        context: Energy usage analysis input
+        interval_count: Number of interval data records available
+        property_zip: Property zip code (optional)
+        
+    Returns:
+        True if solar recommendation should be generated
+    """
+    # Condition 1: Must have interval data
+    if interval_count <= 0:
+        logger.debug("Solar trigger: No interval data")
+        return False
+    
+    # Condition 2: Must not have existing solar
+    if context.solar_info and context.solar_info.has_solar:
+        logger.debug("Solar trigger: Existing solar detected")
+        return False
+    
+    # Condition 3: Must be in California (NEM 3.0 specific)
+    if property_zip:
+        if not property_zip.startswith("9"):
+            logger.debug("Solar trigger: Non-California zip code %s", property_zip)
+            return False
+    
+    # Condition 4: Must have sufficient consumption
+    annual_kwh = context.utility_summary.annual_usage_kwh or 0
+    if annual_kwh < MIN_ANNUAL_KWH_FOR_SOLAR:
+        logger.debug(
+            "Solar trigger: Low consumption %d kWh (threshold %d)",
+            annual_kwh, MIN_ANNUAL_KWH_FOR_SOLAR
+        )
+        return False
+    
+    logger.info("Solar trigger: All conditions met, will generate recommendation")
+    return True
+
+
+def _generate_solar_recommendation(
+    sizing_output: "SolarSizingOutput",
+    roi_output: "SolarROIOutput",
+) -> EnergyUsageRecommendation:
+    """
+    Generate a solar installation recommendation with disclaimers.
+    
+    Args:
+        sizing_output: Solar system sizing results
+        roi_output: ROI calculation results
+        
+    Returns:
+        EnergyUsageRecommendation for solar installation
+    """
+    from .roi.solar import DEFAULT_PPA_RATE
+    
+    # Build summary with appropriate disclaimers
+    summary = (
+        f"Install a {sizing_output.system_size_kw:.1f} kW solar panel system with "
+        f"{sizing_output.battery_capacity_kwh:.0f} kWh battery storage. "
+        f"Estimate based on your actual usage patterns. "
+        f"Actual savings depend on roof orientation and shading. "
+        f"Professional site assessment recommended."
+    )
+    
+    # Build rationale with data evidence
+    rationale = (
+        f"Based on {sizing_output.annual_consumption_kwh:,.0f} kWh annual consumption, "
+        f"a {sizing_output.system_size_kw:.1f} kW system would produce approximately "
+        f"{sizing_output.annual_production_kwh:,.0f} kWh/year ({sizing_output.offset_percentage*100:.0f}% offset). "
+        f"With a ${DEFAULT_PPA_RATE:.2f}/kWh PPA, estimated annual savings of ${roi_output.annual_savings_usd:,.0f} "
+        f"compared to current ${roi_output.current_annual_cost:,.0f}/year utility cost. "
+        f"Battery sized for {sizing_output.peak_period_avg_kwh:.1f} kWh/hr peak (4-7 PM) coverage."
+    )
+    
+    # Qualitative impact estimate
+    impact = (
+        f"Potential ${roi_output.annual_savings_usd:,.0f}/year savings "
+        f"({(roi_output.annual_savings_usd/roi_output.current_annual_cost*100):.0f}% reduction)"
+    )
+    
+    return EnergyUsageRecommendation(
+        step_type=StepType.ENERGY_USAGE,
+        recommendation_type=RecommendationType.UPGRADE,
+        summary=summary,
+        rationale=rationale,
+        estimated_impact=impact,
+        priority=2,  # High priority after critical safety items
+    )
+
+
+def _generate_solar_recommendations_from_optimization(
+    opt_result,
+    annual_consumption_kwh: float,
+) -> List[EnergyUsageRecommendation]:
+    """
+    Generate solar recommendations from optimization results.
+    
+    Creates both Cash and PPA path recommendations when available.
+    
+    Args:
+        opt_result: OptimizationResult from simulator
+        annual_consumption_kwh: Annual consumption for context
+        
+    Returns:
+        List of EnergyUsageRecommendation objects
+    """
+    recommendations = []
+    
+    logger.info(
+        "⚡ Solar optimization baseline: $%.2f/yr, consumption: %.0f kWh/yr",
+        opt_result.baseline_annual_cost_usd,
+        annual_consumption_kwh,
+    )
+    
+    # Generate Cash path recommendation
+    if opt_result.cash_optimal:
+        cash = opt_result.cash_optimal
+        
+        logger.info(
+            "⚡ Cash path: %.1f kW + %.0f kWh battery, production=%.0f kWh/yr, "
+            "cost=$%.0f (net $%.0f), savings=$%.0f/yr, IRR=%.1f%%, payback=%.1f yrs",
+            cash["pv_kw"], cash["battery_kwh"], cash["annual_production_kwh"],
+            cash["system_cost_usd"], cash["net_cost_usd"],
+            cash["year1_savings_usd"], cash["irr_percent"], cash["payback_years"],
+        )
+        
+        battery_text = ""
+        if cash["battery_kwh"] > 0:
+            battery_text = f" with {cash['battery_kwh']:.0f} kWh battery storage"
+        
+        summary = (
+            f"CASH PURCHASE: Install a {cash['pv_kw']:.1f} kW solar panel system{battery_text}. "
+            f"Estimate based on your actual usage patterns. "
+            f"Actual savings depend on roof orientation and shading. "
+            f"Professional site assessment recommended."
+        )
+        
+        rationale = (
+            f"Based on interval-level simulation of {annual_consumption_kwh:,.0f} kWh annual consumption, "
+            f"a {cash['pv_kw']:.1f} kW system produces approximately {cash['annual_production_kwh']:,.0f} kWh/year. "
+            f"Self-consumption: {cash['self_consumption_percent']:.0f}%, Export: {cash['export_percent']:.0f}%. "
+            f"System cost ${cash['system_cost_usd']:,.0f} - 30% ITC = ${cash['net_cost_usd']:,.0f} net. "
+            f"Estimated {cash['irr_percent']:.1f}% IRR with {cash['payback_years']:.1f} year payback."
+        )
+        
+        impact = (
+            f"Potential ${cash['year1_savings_usd']:,.0f}/year savings "
+            f"({cash['year1_savings_usd']/opt_result.baseline_annual_cost_usd*100:.0f}% reduction)"
+        )
+        
+        recommendations.append(EnergyUsageRecommendation(
+            step_type=StepType.ENERGY_USAGE,
+            recommendation_type=RecommendationType.UPGRADE,
+            summary=summary,
+            rationale=rationale,
+            estimated_impact=impact,
+            priority=2,
+            annual_savings_usd=cash['year1_savings_usd'],
+            upgrade_cost_usd=cash['net_cost_usd'],
+            payback_years=cash['payback_years'],
+        ))
+    
+    # Generate PPA path recommendation
+    if opt_result.ppa_optimal:
+        ppa = opt_result.ppa_optimal
+        
+        logger.info(
+            "⚡ PPA path: %.1f kW + %.0f kWh battery, production=%.0f kWh/yr, "
+            "PPA cost=$%.0f/yr, utility cost=$%.0f/yr, savings=$%.0f/yr",
+            ppa["pv_kw"], ppa["battery_kwh"], ppa["annual_production_kwh"],
+            ppa["annual_ppa_cost_usd"], ppa["annual_utility_cost_usd"],
+            ppa["year1_savings_usd"],
+        )
+        
+        battery_text = ""
+        if ppa["battery_kwh"] > 0:
+            battery_text = f" with {ppa['battery_kwh']:.0f} kWh battery"
+        
+        summary = (
+            f"PPA (NO UPFRONT COST): Install a {ppa['pv_kw']:.1f} kW solar panel system{battery_text}. "
+            f"Pay ${ppa['monthly_cost_usd']:.0f}/month total (PPA + utility). "
+            f"Estimate based on your actual usage patterns. "
+            f"Professional site assessment recommended."
+        )
+        
+        rationale = (
+            f"Based on interval-level simulation, a {ppa['pv_kw']:.1f} kW system at $0.18/kWh PPA rate "
+            f"produces {ppa['annual_production_kwh']:,.0f} kWh/year at ${ppa['annual_ppa_cost_usd']:,.0f}/year PPA cost. "
+            f"Remaining utility cost: ${ppa['annual_utility_cost_usd']:,.0f}/year. "
+            f"Self-consumption: {ppa['self_consumption_percent']:.0f}%, Export: {ppa['export_percent']:.0f}%."
+        )
+        
+        impact = (
+            f"Potential ${ppa['year1_savings_usd']:,.0f}/year savings vs current ${opt_result.baseline_annual_cost_usd:,.0f}/year"
+        )
+        
+        # PPA has no upfront cost, savings is difference from baseline
+        recommendations.append(EnergyUsageRecommendation(
+            step_type=StepType.ENERGY_USAGE,
+            recommendation_type=RecommendationType.UPGRADE,
+            summary=summary,
+            rationale=rationale,
+            estimated_impact=impact,
+            priority=2,
+            annual_savings_usd=ppa['year1_savings_usd'],
+            upgrade_cost_usd=0.0,  # PPA has no upfront cost
+            payback_years=0.0,  # Immediate savings (no payback period)
+        ))
+    
+    return recommendations
 
 
 ENERGY_USAGE_SYSTEM_PROMPT = """
@@ -153,6 +386,8 @@ If utility data is missing or severely incomplete, return:
 def analyze_energy_usage(
     context: EnergyUsageAnalysisInput,
     include_service_taxonomy: bool = True,
+    interval_data: Optional[List] = None,
+    property_zip: Optional[str] = None,
 ) -> EnergyUsageAgentOutput:
     """
     Analyze utility usage data and produce evidence-based findings/recommendations.
@@ -160,6 +395,8 @@ def analyze_energy_usage(
     Args:
         context: Structured input containing utility data and audit context
         include_service_taxonomy: Whether to include service catalog constraints
+        interval_data: Optional list of UtilityIntervalData records for solar sizing
+        property_zip: Property zip code for California check
         
     Returns:
         EnergyUsageAgentOutput with findings, recommendations, and confidence
@@ -222,6 +459,59 @@ def analyze_energy_usage(
                 if rec.step_type not in [StepType.ENERGY_USAGE, StepType.HVAC]:
                     rec.step_type = StepType.ENERGY_USAGE
         
+        # Check for solar recommendation opportunity
+        interval_count = len(interval_data) if interval_data else 0
+        data_days = interval_count // 96  # 96 intervals per day
+        
+        if _check_solar_trigger_conditions(context, interval_count, property_zip):
+            try:
+                import numpy as np
+                from .roi.simulator import optimize_solar_system
+                
+                # Convert interval data to numpy array for optimizer
+                consumption_intervals = np.array([
+                    interval.usage_kwh for interval in interval_data
+                ])
+                
+                # Check minimum data coverage (30 days)
+                if data_days < 30:
+                    logger.info(
+                        "Solar trigger: Insufficient data coverage (%d days, minimum 30)",
+                        data_days
+                    )
+                else:
+                    # Run interval-level optimization
+                    opt_result = optimize_solar_system(
+                        consumption_intervals=consumption_intervals,
+                        zip_code=property_zip or "92101",  # Default to SD
+                    )
+                    
+                    if opt_result.error_message:
+                        logger.warning("Solar optimization failed: %s", opt_result.error_message)
+                    else:
+                        # Generate recommendations for valid paths
+                        solar_recs = _generate_solar_recommendations_from_optimization(
+                            opt_result, context.utility_summary.annual_usage_kwh or 0
+                        )
+                        result.recommendations.extend(solar_recs)
+                        
+                        if opt_result.cash_optimal:
+                            logger.info(
+                                "Solar Cash recommendation: %.1f kW, %.1f%% IRR, $%.0f/yr savings",
+                                opt_result.cash_optimal["pv_kw"],
+                                opt_result.cash_optimal["irr_percent"],
+                                opt_result.cash_optimal["year1_savings_usd"]
+                            )
+                        if opt_result.ppa_optimal:
+                            logger.info(
+                                "Solar PPA recommendation: %.1f kW, $%.0f/yr savings",
+                                opt_result.ppa_optimal["pv_kw"],
+                                opt_result.ppa_optimal["year1_savings_usd"]
+                            )
+                            
+            except Exception as e:
+                logger.warning("Failed to generate solar recommendation: %s", e, exc_info=True)
+        
         return result
         
     except Exception as e:
@@ -257,13 +547,19 @@ def convert_to_standard_recommendations(
             "summary": rec.summary,
             "recommendation_type": rec.recommendation_type.value,
             "source": "energy_usage_agent",
-            # Note: annual_savings_usd, upgrade_cost_usd, payback_years
-            # will be populated by ROI enrichment system
         }
         
         # Add priority as order_of_completion if provided
         if rec.priority:
             standard_rec["order_of_completion"] = rec.priority
+        
+        # Add ROI fields if populated (from solar optimization)
+        if rec.annual_savings_usd is not None:
+            standard_rec["annual_savings_usd"] = rec.annual_savings_usd
+        if rec.upgrade_cost_usd is not None:
+            standard_rec["upgrade_cost_usd"] = rec.upgrade_cost_usd
+        if rec.payback_years is not None:
+            standard_rec["payback_years"] = rec.payback_years
             
         standard_recs.append(standard_rec)
     
@@ -283,17 +579,25 @@ class EnergyUsageAgent:
     def analyze(
         self,
         context: EnergyUsageAnalysisInput,
+        interval_data: Optional[List] = None,
+        property_zip: Optional[str] = None,
     ) -> EnergyUsageAgentOutput:
         """
         Run energy usage analysis.
         
         Args:
             context: Structured analysis input
+            interval_data: Optional list of UtilityIntervalData records for solar sizing
+            property_zip: Property zip code for California check
             
         Returns:
             EnergyUsageAgentOutput with findings and recommendations
         """
-        return analyze_energy_usage(context)
+        return analyze_energy_usage(
+            context,
+            interval_data=interval_data,
+            property_zip=property_zip,
+        )
     
     def get_standard_recommendations(
         self,

@@ -25,10 +25,10 @@ class CostFormula(BaseModel):
 
     type: str = Field(
         default="per_sqft",
-        description="Formula type: 'per_sqft' calculates cost = base_cost_per_sqft * area",
+        description="Formula type: 'per_sqft', 'range', 'fixed', 'ppa'",
     )
-    base_cost_per_sqft: float = Field(
-        ..., gt=0, description="Cost per square foot for the upgrade"
+    base_cost_per_sqft: Optional[float] = Field(
+        default=None, gt=0, description="Cost per square foot for per_sqft type upgrades"
     )
     min_cost: Optional[float] = Field(
         default=None, description="Minimum cost floor (e.g., minimum service charge)"
@@ -44,18 +44,22 @@ class CostFormula(BaseModel):
         default=None, description="Human-readable notes about the formula assumptions"
     )
 
-    def calculate(self, area_sqft: float) -> float:
+    def calculate(self, area_sqft: float) -> Optional[float]:
         """Calculate estimated cost from area.
         
         Args:
             area_sqft: The applicable area in square feet (already adjusted if needed).
             
         Returns:
-            Estimated cost in USD, clamped to min/max bounds.
+            Estimated cost in USD, clamped to min/max bounds. None for non-per_sqft types.
         """
         if self.type != "per_sqft":
-            raise ValueError(f"Unknown cost formula type: {self.type}")
+            # Non-per_sqft types (range, fixed, ppa) can't be calculated from area
+            return None
         
+        if self.base_cost_per_sqft is None:
+            return None
+            
         raw_cost = self.base_cost_per_sqft * area_sqft
         
         # Apply min/max bounds
@@ -76,9 +80,9 @@ class ServiceEntry(BaseModel):
     sub_category_detail: Optional[str] = Field(
         default=None, description="Specific detail (e.g., 'Attic', 'Water Heater')"
     )
-    action: str = Field(..., description="Action type (e.g., 'Install', 'Replace', 'Repair', 'Optimization')")
-    order_of_completion: int = Field(
-        ..., ge=1, le=10, description="Priority order for work sequencing (lower = do first)"
+    action: Optional[str] = Field(default=None, description="Action type (e.g., 'Install', 'Replace', 'Repair', 'Optimization')")
+    order_of_completion: Optional[int] = Field(
+        default=None, ge=1, le=10, description="Priority order for work sequencing (lower = do first)"
     )
     estimated_cost_usd: Optional[float] = Field(default=None, description="Estimated cost in USD (static fallback)")
     cost_formula: Optional[CostFormula] = Field(
@@ -121,7 +125,8 @@ class ServiceEntry(BaseModel):
         parts = [self.sub_category]
         if self.sub_category_detail:
             parts.append(self.sub_category_detail)
-        parts.append(self.action)
+        if self.action:
+            parts.append(self.action)
         return " - ".join(parts)
 
     @property
@@ -130,7 +135,8 @@ class ServiceEntry(BaseModel):
         parts = [self.category, self.sub_category]
         if self.sub_category_detail:
             parts.append(self.sub_category_detail)
-        parts.append(self.action)
+        if self.action:
+            parts.append(self.action)
         return " > ".join(parts)
 
 

@@ -14,11 +14,17 @@ def app():
     db.init_app(app)
     with app.app_context():
         db.create_all()
-        prop = Property(street="2 Test St", city="Town", state="CA", zip_code="90000", year_built=1995, sqft=1200, property_type="single_family")
+        # Create a test user first
+        from models import User
+        user = User(id="test-user-1", email="test@example.com")
+        db.session.add(user)
+        db.session.commit()
+        
+        prop = Property(user_id=user.id, street="2 Test St", city="Town", state="CA", zip_code="90000", year_built=1995, sqft=1200, property_type="single_family")
         db.session.add(prop); db.session.commit()
-        audit = Audit(property_id=prop.id, notes="Owner mentions drafts")
+        audit = Audit(property_id=prop.id, user_id=user.id, notes="Owner mentions drafts")
         db.session.add(audit); db.session.commit()
-        step = AuditStep(audit_id=audit.id, step_type="hvac", label="Furnace", status="Completed")
+        step = AuditStep(audit_id=audit.id, user_id=user.id, step_type="hvac", label="Furnace", status="Completed")
         step.summary = "Single-stage furnace from 1998"
         step.ai_summary = {"efficiency": "low"}
         db.session.add(step); db.session.commit()
@@ -33,12 +39,14 @@ def ctx(app):
 
 def test_semantic_snippets_appended(monkeypatch, ctx):
     from agents.context_builder import get_audit_memory_context
-    # Disable chat memory noise; enable semantic recall
-    monkeypatch.setattr("memory.config.memory_enabled", lambda: False)
-    monkeypatch.setattr("memory.config.semantic_enabled", lambda: True)
-    monkeypatch.setattr("memory.config.semantic_top_k", lambda: 3)
+    # Enable memory (required to reach semantic recall section) but mock chat messages
+    # Patch where functions are used, not where they're defined
+    monkeypatch.setattr("agents.context_builder.memory_enabled", lambda: True)
+    monkeypatch.setattr("agents.context_builder.get_recent_messages", lambda audit_id, limit=12: [])
+    monkeypatch.setattr("agents.context_builder.semantic_enabled", lambda: True)
+    monkeypatch.setattr("agents.context_builder.semantic_top_k", lambda: 3)
     # Mock retrieval to avoid OpenAI and DB reads
-    monkeypatch.setattr("memory.semantic.retrieve_relevant_snippets", lambda audit_id, q, k=None: [
+    monkeypatch.setattr("agents.context_builder.retrieve_relevant_snippets", lambda audit_id, q, k=None: [
         "hvac efficiency: low",
         "insulation depth: 8 inches",
     ])
