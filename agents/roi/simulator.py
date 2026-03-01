@@ -38,8 +38,11 @@ HOURS_PER_YEAR = 8760
 INTERVALS_PER_YEAR = 35040  # 8760 * 4
 
 # Optimization grid
-PV_SIZES_KW = [i * 0.5 for i in range(2, 21)]  # 1.0 to 10.0 kW in 0.5 steps
+PV_SIZES_KW = [i * 1.0 for i in range(2, 21)]  # 2.0 to 20.0 kW in 1.0 steps
 BATTERY_SIZES_KWH = [0, 5, 10, 15, 20, 25, 30]  # 7 options
+
+# Minimum IRR threshold for cash recommendations (investments should beat market returns)
+MIN_IRR_THRESHOLD = 5.0
 
 # Minimum data coverage for optimization
 MIN_DATA_DAYS = 30
@@ -534,7 +537,9 @@ def optimize_solar_system(
     pv_profile_15min = interpolate_to_15min(hourly_profile)
     
     # Track best configurations
-    best_cash_irr = -float('inf')
+    # For Cash: maximize annual savings (with minimum IRR threshold)
+    # For PPA: minimize total annual cost
+    best_cash_savings = -float('inf')
     best_cash_config = None
     best_ppa_cost = float('inf')
     best_ppa_config = None
@@ -578,9 +583,11 @@ def optimize_solar_system(
                 result.baseline_annual_cost_usd,
             )
             
-            # Track best Cash (highest IRR)
-            if cash_result.irr_percent > best_cash_irr:
-                best_cash_irr = cash_result.irr_percent
+            # Track best Cash (highest savings with minimum IRR threshold)
+            # This ensures we recommend meaningful-sized systems, not tiny ones with high IRR
+            if (cash_result.irr_percent >= MIN_IRR_THRESHOLD and 
+                cash_result.year1_savings_usd > best_cash_savings):
+                best_cash_savings = cash_result.year1_savings_usd
                 best_cash_config = {
                     "pv_kw": pv_kw,
                     "battery_kwh": battery_kwh,
@@ -615,8 +622,8 @@ def optimize_solar_system(
     result.configurations_evaluated = configs_evaluated
     result.runtime_seconds = time.time() - start_time
     
-    # Only include valid results
-    if best_cash_config and best_cash_config["irr_percent"] > 0:
+    # Only include valid results (positive savings and above minimum IRR)
+    if best_cash_config and best_cash_config["irr_percent"] > MIN_IRR_THRESHOLD:
         result.cash_optimal = best_cash_config
     
     if best_ppa_config and best_ppa_config["year1_savings_usd"] > 0:
@@ -641,7 +648,7 @@ def optimize_solar_system(
     
     logger.info(
         f"Optimization complete: {configs_evaluated} configs in "
-        f"{result.runtime_seconds:.2f}s. Cash IRR: {best_cash_irr:.1f}%, "
+        f"{result.runtime_seconds:.2f}s. Best savings: ${best_cash_savings:.0f}/yr, "
         f"PPA cost: ${best_ppa_cost:.2f}/yr"
     )
     
