@@ -544,17 +544,25 @@ class EnergyUsageAgent:
     def analyze(
         self,
         context: EnergyUsageAnalysisInput,
+        interval_data: Optional[List] = None,
+        property_zip: Optional[str] = None,
     ) -> EnergyUsageAgentOutput:
         """
         Run energy usage analysis.
         
         Args:
             context: Structured analysis input
+            interval_data: Optional list of UtilityIntervalData records for solar sizing
+            property_zip: Property zip code for California check
             
         Returns:
             EnergyUsageAgentOutput with findings and recommendations
         """
-        return analyze_energy_usage(context)
+        return analyze_energy_usage(
+            context,
+            interval_data=interval_data,
+            property_zip=property_zip,
+        )
     
     def get_standard_recommendations(
         self,

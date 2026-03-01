@@ -4,7 +4,7 @@ from .base_agent import run_agent
 from .context_builder import build_audit_context, build_audio_context, get_audit_memory_context, get_energy_usage_context
 from .schemas import StepType
 from .services.filter import filter_and_enrich_recommendations
-from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit
+from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit, UtilityConnection, UtilityIntervalData
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 from sqlalchemy import func
@@ -406,8 +406,40 @@ class OrchestratorAgent:
                 energy_context = get_energy_usage_context(self.audit_id)
                 if energy_context:
                     logger.info("⚡ Running Energy Usage Agent (utility data connected)")
+                    
+                    # Query interval data for solar sizing
+                    interval_data = None
+                    property_zip = None
+                    try:
+                        # Get the utility connection
+                        connection = UtilityConnection.query.filter_by(
+                            audit_id=self.audit_id,
+                            status='connected'
+                        ).first()
+                        if connection:
+                            interval_data = UtilityIntervalData.query.filter_by(
+                                connection_id=connection.id
+                            ).order_by(UtilityIntervalData.interval_start).all()
+                            logger.info(
+                                "⚡ Retrieved %d interval records for solar sizing",
+                                len(interval_data) if interval_data else 0
+                            )
+                        
+                        # Get property zip code
+                        audit = Audit.query.get(self.audit_id)
+                        if audit and audit.property:
+                            property_zip = audit.property.zip_code
+                            logger.info("⚡ Property zip code: %s", property_zip)
+                    except Exception as e:
+                        logger.warning("Failed to retrieve interval data or zip: %s", e)
+                        db.session.rollback()
+                    
                     energy_agent = EnergyUsageAgent()
-                    energy_output = energy_agent.analyze(energy_context)
+                    energy_output = energy_agent.analyze(
+                        energy_context,
+                        interval_data=interval_data,
+                        property_zip=property_zip,
+                    )
                     
                     if energy_output and energy_output.recommendations:
                         energy_usage_recs = convert_to_standard_recommendations(energy_output)
