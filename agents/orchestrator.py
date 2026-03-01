@@ -372,6 +372,10 @@ class OrchestratorAgent:
                 upsert_embeddings_for_audit(self.audit_id)
             except Exception:
                 logger.debug("upsert_embeddings_for_audit skipped due to error", exc_info=True)
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
         context = get_audit_memory_context(self.audit_id, exclude_audio=True)
         logger.info("🤖 Contextual AI pass context length=%d", len(context or ""))
         context_outputs = {}
