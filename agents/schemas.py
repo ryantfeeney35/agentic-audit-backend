@@ -314,7 +314,19 @@ class EnergyUsageRecommendation(BaseModel):
         le=5,
         description="Priority level 1-5 (1=highest)",
     )
-    # Note: annual_savings_usd, upgrade_cost_usd, payback_years handled by ROI system
+    # ROI fields - populated by solar optimization or ROI enrichment system
+    annual_savings_usd: Optional[float] = Field(
+        default=None,
+        description="Estimated annual savings in USD",
+    )
+    upgrade_cost_usd: Optional[float] = Field(
+        default=None,
+        description="Estimated upgrade cost in USD",
+    )
+    payback_years: Optional[float] = Field(
+        default=None,
+        description="Estimated payback period in years",
+    )
 
 
 class OccupancyInfo(BaseModel):

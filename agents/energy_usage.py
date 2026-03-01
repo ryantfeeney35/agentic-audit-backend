@@ -159,9 +159,23 @@ def _generate_solar_recommendations_from_optimization(
     """
     recommendations = []
     
+    logger.info(
+        "⚡ Solar optimization baseline: $%.2f/yr, consumption: %.0f kWh/yr",
+        opt_result.baseline_annual_cost_usd,
+        annual_consumption_kwh,
+    )
+    
     # Generate Cash path recommendation
     if opt_result.cash_optimal:
         cash = opt_result.cash_optimal
+        
+        logger.info(
+            "⚡ Cash path: %.1f kW + %.0f kWh battery, production=%.0f kWh/yr, "
+            "cost=$%.0f (net $%.0f), savings=$%.0f/yr, IRR=%.1f%%, payback=%.1f yrs",
+            cash["pv_kw"], cash["battery_kwh"], cash["annual_production_kwh"],
+            cash["system_cost_usd"], cash["net_cost_usd"],
+            cash["year1_savings_usd"], cash["irr_percent"], cash["payback_years"],
+        )
         
         battery_text = ""
         if cash["battery_kwh"] > 0:
@@ -194,11 +208,22 @@ def _generate_solar_recommendations_from_optimization(
             rationale=rationale,
             estimated_impact=impact,
             priority=2,
+            annual_savings_usd=cash['year1_savings_usd'],
+            upgrade_cost_usd=cash['net_cost_usd'],
+            payback_years=cash['payback_years'],
         ))
     
     # Generate PPA path recommendation
     if opt_result.ppa_optimal:
         ppa = opt_result.ppa_optimal
+        
+        logger.info(
+            "⚡ PPA path: %.1f kW + %.0f kWh battery, production=%.0f kWh/yr, "
+            "PPA cost=$%.0f/yr, utility cost=$%.0f/yr, savings=$%.0f/yr",
+            ppa["pv_kw"], ppa["battery_kwh"], ppa["annual_production_kwh"],
+            ppa["annual_ppa_cost_usd"], ppa["annual_utility_cost_usd"],
+            ppa["year1_savings_usd"],
+        )
         
         battery_text = ""
         if ppa["battery_kwh"] > 0:
@@ -222,6 +247,7 @@ def _generate_solar_recommendations_from_optimization(
             f"Potential ${ppa['year1_savings_usd']:,.0f}/year savings vs current ${opt_result.baseline_annual_cost_usd:,.0f}/year"
         )
         
+        # PPA has no upfront cost, savings is difference from baseline
         recommendations.append(EnergyUsageRecommendation(
             step_type=StepType.ENERGY_USAGE,
             recommendation_type=RecommendationType.UPGRADE,
@@ -229,6 +255,9 @@ def _generate_solar_recommendations_from_optimization(
             rationale=rationale,
             estimated_impact=impact,
             priority=2,
+            annual_savings_usd=ppa['year1_savings_usd'],
+            upgrade_cost_usd=0.0,  # PPA has no upfront cost
+            payback_years=0.0,  # Immediate savings (no payback period)
         ))
     
     return recommendations
@@ -518,13 +547,19 @@ def convert_to_standard_recommendations(
             "summary": rec.summary,
             "recommendation_type": rec.recommendation_type.value,
             "source": "energy_usage_agent",
-            # Note: annual_savings_usd, upgrade_cost_usd, payback_years
-            # will be populated by ROI enrichment system
         }
         
         # Add priority as order_of_completion if provided
         if rec.priority:
             standard_rec["order_of_completion"] = rec.priority
+        
+        # Add ROI fields if populated (from solar optimization)
+        if rec.annual_savings_usd is not None:
+            standard_rec["annual_savings_usd"] = rec.annual_savings_usd
+        if rec.upgrade_cost_usd is not None:
+            standard_rec["upgrade_cost_usd"] = rec.upgrade_cost_usd
+        if rec.payback_years is not None:
+            standard_rec["payback_years"] = rec.payback_years
             
         standard_recs.append(standard_rec)
     
