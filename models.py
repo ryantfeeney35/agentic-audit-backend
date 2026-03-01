@@ -2,8 +2,12 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB   # ✅ PostgreSQL JSONB
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB   # ✅ PostgreSQL JSONB
+from sqlalchemy.types import JSON
 import uuid
+
+# Cross-database JSON type: JSONB on PostgreSQL, JSON on SQLite/others
+JSONB = JSON().with_variant(PG_JSONB, 'postgresql')
 
 db = SQLAlchemy()
 

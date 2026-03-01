@@ -42,8 +42,23 @@ def upsert_embeddings_for_audit(audit_id: int) -> int:
     if not semantic_enabled():
         return 0
 
+    # Ensure clean transaction state before starting
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+
     # Prepare content to embed
-    contents = _extract_structured_snippets(audit_id)
+    try:
+        contents = _extract_structured_snippets(audit_id)
+    except Exception as e:
+        logger.warning("Failed to extract snippets for semantic embedding: %s", e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return 0
+        
     if not contents:
         # clear old rows
         try:
@@ -103,6 +118,12 @@ def retrieve_relevant_snippets(audit_id: int, query_text: str, k: int | None = N
     except Exception:
         return []
 
+    # Ensure clean transaction state
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+
     try:
         # 1) Fetch all rows for audit
         rows = db.session.execute(text("SELECT content, embedding FROM audit_memory_embeddings WHERE audit_id = :aid"), {"aid": audit_id}).fetchall()
@@ -129,4 +150,8 @@ def retrieve_relevant_snippets(audit_id: int, query_text: str, k: int | None = N
         return [c for _, c in scored[:topk] if _ > 0.0]
     except Exception as e:
         logger.debug("retrieve_relevant_snippets fallback: %s", e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         return []

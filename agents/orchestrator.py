@@ -362,6 +362,7 @@ class OrchestratorAgent:
                 )
             except Exception:
                 logger.exception("❌ %s agent failed during audio recommendations", domain)
+                db.session.rollback()  # Clear any failed transaction state
                 audio_outputs[domain] = {}
 
         # --- Pass 2: Contextual AI recommendations (build full context but explicitly exclude audio-derived summaries) ---
@@ -385,9 +386,15 @@ class OrchestratorAgent:
                 )
             except Exception:
                 logger.exception("❌ %s agent failed during contextual recommendations", domain)
+                db.session.rollback()  # Clear any failed transaction state
                 context_outputs[domain] = {}
 
         # --- Pass 3: Energy Usage Agent (conditional) ---
+        # Ensure clean transaction state before DB queries
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         # Only runs if utility data is connected for this audit
         energy_usage_recs = []
         if EnergyUsageAgent is not None:
@@ -412,6 +419,7 @@ class OrchestratorAgent:
                     logger.debug("Energy Usage Agent skipped: no utility data connected")
             except Exception:
                 logger.exception("❌ Energy Usage Agent failed")
+                db.session.rollback()  # Clear any failed transaction state
                 energy_usage_recs = []
 
         # Merge audio-first then AI context outputs preserving order
