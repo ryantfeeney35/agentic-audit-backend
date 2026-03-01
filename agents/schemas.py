@@ -440,3 +440,198 @@ class EnergyUsageAgentOutput(BaseModel):
         ...,
         description="Executive summary of energy usage analysis",
     )
+
+
+# -------------------------
+# Solar Sizing Schemas (NEM 3.0)
+# -------------------------
+class SolarSizingInput(BaseModel):
+    """Input metrics for solar system sizing calculation.
+    
+    Derived from 15-minute interval data for accurate NEM 3.0 sizing.
+    """
+    annual_consumption_kwh: float = Field(
+        ...,
+        description="Total annual consumption from interval data",
+    )
+    peak_period_avg_kwh: float = Field(
+        ...,
+        description="Average consumption during 4-7 PM peak period (kWh/hour)",
+    )
+    monthly_consumption: Optional[List[float]] = Field(
+        default=None,
+        description="Monthly consumption totals (12 values)",
+    )
+    weekday_hourly_avg: Optional[List[float]] = Field(
+        default=None,
+        description="Hourly averages for weekdays (24 values)",
+    )
+    weekend_hourly_avg: Optional[List[float]] = Field(
+        default=None,
+        description="Hourly averages for weekends (24 values)",
+    )
+    data_coverage_months: float = Field(
+        ...,
+        ge=0,
+        le=12,
+        description="Number of months of interval data available",
+    )
+    property_zip: Optional[str] = Field(
+        default=None,
+        description="Property zip code for location validation",
+    )
+
+
+class SolarSizingOutput(BaseModel):
+    """Output from solar system sizing calculation.
+    
+    Contains recommended system size and battery capacity under NEM 3.0.
+    """
+    system_size_kw: float = Field(
+        ...,
+        description="Recommended solar array size in kW",
+    )
+    battery_capacity_kwh: float = Field(
+        ...,
+        description="Recommended battery storage capacity in kWh",
+    )
+    annual_production_kwh: float = Field(
+        ...,
+        description="Estimated annual production based on San Diego insolation",
+    )
+    annual_consumption_kwh: float = Field(
+        ...,
+        description="Annual consumption from interval data",
+    )
+    offset_percentage: float = Field(
+        ...,
+        ge=0,
+        le=1.5,
+        description="Production / consumption ratio",
+    )
+    peak_period_avg_kwh: float = Field(
+        ...,
+        description="Average 4-7 PM consumption used for battery sizing",
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Confidence based on data coverage",
+    )
+
+
+class SolarROIOutput(BaseModel):
+    """ROI calculation output for solar PPA model.
+    
+    Compares current utility cost to post-solar cost under NEM 3.0.
+    """
+    annual_savings_usd: float = Field(
+        ...,
+        description="Estimated first-year savings",
+    )
+    current_annual_cost: float = Field(
+        ...,
+        description="Current annual utility cost under TOU-DR1",
+    )
+    post_solar_annual_cost: float = Field(
+        ...,
+        description="Total annual cost with solar (PPA + remaining grid)",
+    )
+    ppa_annual_cost: float = Field(
+        ...,
+        description="Annual PPA payment for solar generation",
+    )
+    grid_annual_cost: float = Field(
+        ...,
+        description="Annual grid cost after solar offset",
+    )
+    payback_years: float = Field(
+        default=0.0,
+        description="Years to payback (0 for PPA model - no upfront cost)",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Interval-Based Solar Optimization Schemas (NEM 3.0 Simulation-Based)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class CashRecommendation(BaseModel):
+    """Cash purchase path recommendation for solar + battery."""
+    
+    pv_kw: float = Field(..., description="Optimal PV system size in kW")
+    battery_kwh: float = Field(..., description="Optimal battery capacity in kWh")
+    irr_percent: float = Field(..., description="Internal rate of return over 25 years")
+    payback_years: float = Field(..., description="Simple payback period in years")
+    net_cost_usd: float = Field(..., description="System cost after 30% ITC")
+    system_cost_usd: float = Field(..., description="Total system cost before incentives")
+    year1_savings_usd: float = Field(..., description="First year utility savings")
+    post_solar_annual_cost_usd: float = Field(..., description="Annual utility cost with solar")
+    self_consumption_percent: float = Field(..., description="Percentage of solar used on-site")
+    export_percent: float = Field(..., description="Percentage of solar exported to grid")
+    annual_production_kwh: float = Field(..., description="Annual solar production estimate")
+
+
+class PPARecommendation(BaseModel):
+    """PPA path recommendation for solar + battery."""
+    
+    pv_kw: float = Field(..., description="Optimal PV system size in kW")
+    battery_kwh: float = Field(..., description="Optimal battery capacity in kWh")
+    monthly_cost_usd: float = Field(..., description="Monthly total cost (PPA + utility)")
+    year1_total_cost_usd: float = Field(..., description="Year 1 total cost")
+    year1_savings_usd: float = Field(..., description="Year 1 savings vs baseline")
+    annual_ppa_cost_usd: float = Field(..., description="Annual PPA payment")
+    annual_utility_cost_usd: float = Field(..., description="Annual utility cost with solar")
+    self_consumption_percent: float = Field(..., description="Percentage of solar used on-site")
+    export_percent: float = Field(..., description="Percentage of solar exported to grid")
+    annual_production_kwh: float = Field(..., description="Annual solar production estimate")
+
+
+class OptimizationDetails(BaseModel):
+    """Diagnostic information from solar optimization."""
+    
+    configurations_evaluated: int = Field(..., description="Number of PV+battery combinations tested")
+    runtime_seconds: float = Field(..., description="Optimization runtime")
+    paths_aligned: bool = Field(False, description="True if Cash and PPA recommend same system")
+    data_coverage_days: int = Field(..., description="Days of interval data used")
+    data_confidence: float = Field(..., description="Confidence score based on data coverage (0-1)")
+
+
+class SolarOptimizationOutput(BaseModel):
+    """Output from interval-based solar + battery optimization.
+    
+    Contains both Cash and PPA path recommendations with detailed metrics.
+    """
+    # Dual-path recommendations
+    cash_recommendation: Optional[CashRecommendation] = Field(
+        None,
+        description="Cash purchase recommendation (maximize IRR)",
+    )
+    ppa_recommendation: Optional[PPARecommendation] = Field(
+        None,
+        description="PPA recommendation (minimize Year-1 cost)",
+    )
+    
+    # Baseline for comparison
+    baseline_annual_cost_usd: float = Field(
+        ...,
+        description="Annual utility cost without solar",
+    )
+    
+    # Interval data summary
+    annual_consumption_kwh: float = Field(
+        ...,
+        description="Total annual consumption from interval data",
+    )
+    
+    # Optimization metadata
+    optimization_details: Optional[OptimizationDetails] = Field(
+        None,
+        description="Diagnostic information from optimization",
+    )
+    
+    # Error handling
+    error_message: Optional[str] = Field(
+        None,
+        description="Error message if optimization failed",
+    )

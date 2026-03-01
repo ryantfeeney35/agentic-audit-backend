@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "last_updated": "2026-01-22",
+  "version": "1.1",
+  "last_updated": "2026-02-17",
   "services": [
     {
       "id": "home-efficiency-insulation-attic-install",
@@ -15,11 +15,11 @@
         "base_cost_per_sqft": 1.50,
         "min_cost": 500,
         "max_cost": 5000,
-        "notes": "Blown-in fiberglass or cellulose to R-38. Cost varies by material and accessibility."
+        "notes": "Blown-in cellular. Cost varies by material and accessibility."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["attic insulation", "install attic", "add attic insulation", "attic insulation installation"]
+      "keywords": ["attic insulation", "install attic", "add attic insulation", "attic insulation installation", "blown in cellular"]
     },
     {
       "id": "home-efficiency-insulation-attic-replace",
@@ -28,17 +28,48 @@
       "sub_category_detail": "Attic",
       "action": "Replace",
       "order_of_completion": 4,
-      "estimated_cost_usd": null,
+      "estimated_cost_usd": 2700,
       "cost_formula": {
         "type": "per_sqft",
-        "base_cost_per_sqft": 2.25,
+        "base_cost_per_sqft": 1.80,
         "min_cost": 800,
         "max_cost": 7500,
-        "notes": "Includes removal of old insulation plus new blown-in to R-38. Higher cost due to disposal."
+        "notes": "Blown-in cellular using R30 for 1,500 sf attic area. Includes removal of old insulation plus new blown-in."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["replace attic insulation", "upgrade attic insulation", "attic insulation replacement"]
+      "keywords": ["replace attic insulation", "upgrade attic insulation", "attic insulation replacement", "blown-in cellular", "R30"]
+    },
+    {
+      "id": "home-efficiency-insulation-attic-repair",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": "Attic",
+      "action": "Repair",
+      "order_of_completion": null,
+      "estimated_cost_usd": null,
+      "cost_formula": null,
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["repair attic insulation", "fix attic insulation", "attic insulation repair"]
+    },
+    {
+      "id": "home-efficiency-air-sealing-attic-install",
+      "category": "Home Efficiency",
+      "sub_category": "Air Sealing",
+      "sub_category_detail": "Attic",
+      "action": "Air Sealing",
+      "order_of_completion": null,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "range",
+        "min_cost": 1000,
+        "max_cost": 1500,
+        "notes": "Remove existing insulation, apply elastomeric. Whole house $2,500-$4,500 using AeroBarrier from Aero Seal."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["attic sealing", "attic air sealing", "seal attic bypasses", "attic penetrations", "top plate sealing", "elastomeric", "aerobarrier"]
     },
     {
       "id": "home-efficiency-insulation-wall-install",
@@ -54,11 +85,11 @@
         "min_cost": 1500,
         "max_cost": 8000,
         "sqft_multiplier": 0.40,
-        "notes": "Blown-in wall insulation. sqft_multiplier converts property sqft to estimated wall area."
+        "notes": "Blown-in cellular wall insulation. sqft_multiplier converts property sqft to estimated wall area."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["wall insulation", "install wall insulation", "add wall insulation", "blow-in wall"]
+      "keywords": ["wall insulation", "install wall insulation", "add wall insulation", "blow-in wall", "blown-in cellular"]
     },
     {
       "id": "home-efficiency-insulation-crawlspace-install",
@@ -74,11 +105,31 @@
         "min_cost": 800,
         "max_cost": 5000,
         "sqft_multiplier": 0.50,
-        "notes": "Batt or spray foam under floor joists. sqft_multiplier: crawlspace typically 50% of footprint for single-story."
+        "notes": "Air seal crawlspace. sqft_multiplier: crawlspace typically 50% of footprint for single-story."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["crawlspace insulation", "crawl space insulation", "install crawlspace", "underfloor insulation"]
+      "keywords": ["crawlspace insulation", "crawl space insulation", "install crawlspace", "underfloor insulation", "air seal"]
+    },
+    {
+      "id": "home-efficiency-insulation-repair",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": null,
+      "action": "Repair",
+      "order_of_completion": null,
+      "estimated_cost_usd": 2000,
+      "cost_formula": {
+        "type": "range",
+        "min_cost": 1350,
+        "max_cost": 3000,
+        "material_cost": 90,
+        "labor_cost_max": 2000,
+        "notes": "Material & Labor Fiberglass batt. Range $1,350-$3,000, $90-$2,000."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["insulation repair", "fiberglass batt", "repair insulation", "fix insulation"]
     },
     {
       "id": "home-efficiency-insulation-crawlspace-replace",
@@ -103,19 +154,19 @@
     {
       "id": "home-efficiency-air-sealing-weatherstripping-install",
       "category": "Home Efficiency",
-      "sub_category": "Air Sealing",
+      "sub_category": "Air Sealing - Whole House",
       "sub_category_detail": "Weather stripping",
       "action": "Install",
       "order_of_completion": 3,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["weather stripping", "weatherstripping", "door seal", "window seal", "draft seal"]
+      "keywords": ["weather stripping", "weatherstripping", "door seal", "window seal", "draft seal", "ext doors", "outlets", "plumbing"]
     },
     {
       "id": "home-efficiency-air-sealing-caulking-install",
       "category": "Home Efficiency",
-      "sub_category": "Air Sealing",
+      "sub_category": "Air Sealing - Ext Doors, windows",
       "sub_category_detail": "Caulking",
       "action": "Install",
       "order_of_completion": 3,
@@ -123,18 +174,6 @@
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["caulking", "caulk", "seal gaps", "seal cracks", "air seal penetrations"]
-    },
-    {
-      "id": "home-efficiency-air-sealing-attic-install",
-      "category": "Home Efficiency",
-      "sub_category": "Air Sealing",
-      "sub_category_detail": "Attic sealing",
-      "action": "Install",
-      "order_of_completion": 3,
-      "estimated_cost_usd": null,
-      "estimated_kwh_savings": null,
-      "rebate_eligible": false,
-      "keywords": ["attic sealing", "attic air sealing", "seal attic bypasses", "attic penetrations", "top plate sealing"]
     },
     {
       "id": "home-efficiency-alignment-doors-install",
@@ -161,6 +200,18 @@
       "keywords": ["hvac optimization", "hvac tune-up", "system optimization", "hvac maintenance", "furnace tune-up", "ac tune-up"]
     },
     {
+      "id": "hvac-unit-duct-test",
+      "category": "HVAC",
+      "sub_category": "Unit",
+      "sub_category_detail": null,
+      "action": "Duct Test",
+      "order_of_completion": null,
+      "estimated_cost_usd": 350,
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["duct test", "duct leakage test", "duct blaster", "ductwork testing"]
+    },
+    {
       "id": "hvac-unit-repair",
       "category": "HVAC",
       "sub_category": "Unit",
@@ -173,28 +224,28 @@
       "keywords": ["hvac repair", "furnace repair", "ac repair", "heat pump repair", "fix hvac"]
     },
     {
-      "id": "hvac-unit-replacement-gas",
+      "id": "hvac-electrical-conversion-replacement-gas",
       "category": "HVAC",
-      "sub_category": "Unit",
+      "sub_category": "Electrical Conversion",
       "sub_category_detail": null,
       "action": "Replacement Gas",
       "order_of_completion": 6,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["gas furnace replacement", "replace gas furnace", "new gas furnace", "gas heating replacement"]
+      "keywords": ["gas furnace replacement", "replace gas furnace", "new gas furnace", "gas heating replacement", "electrical conversion"]
     },
     {
-      "id": "hvac-unit-replacement-electric",
+      "id": "hvac-unit-replacement-heatpump",
       "category": "HVAC",
       "sub_category": "Unit",
       "sub_category_detail": null,
-      "action": "Replacement Electric",
+      "action": "Replacement Heatpump",
       "order_of_completion": 6,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["heat pump replacement", "electric hvac replacement", "replace with heat pump", "electric heating", "heat pump installation", "mini-split"]
+      "keywords": ["heat pump replacement", "electric hvac replacement", "replace with heat pump", "electric heating", "heat pump installation", "mini-split", "heatpump"]
     },
     {
       "id": "hvac-ducting-repair",
@@ -203,7 +254,13 @@
       "sub_category_detail": null,
       "action": "Repair",
       "order_of_completion": 5,
-      "estimated_cost_usd": null,
+      "estimated_cost_usd": 1000,
+      "cost_formula": {
+        "type": "fixed",
+        "material_cost": 250,
+        "labor_cost": 750,
+        "notes": "Duct repair including materials and labor."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["duct repair", "fix duct", "duct sealing", "seal ducts", "duct leak repair", "mastic seal", "ductwork repair", "repair ductwork", "deteriorated ductwork"]
@@ -215,10 +272,86 @@
       "sub_category_detail": null,
       "action": "Replace",
       "order_of_completion": 5,
-      "estimated_cost_usd": null,
+      "estimated_cost_usd": 3000,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
       "keywords": ["duct replacement", "replace ducts", "new ductwork", "duct system replacement", "replace ductwork", "ductwork replacement"]
+    },
+    {
+      "id": "water-heater-heat-pump-install",
+      "category": "Water Heater",
+      "sub_category": "Water Heater",
+      "sub_category_detail": null,
+      "action": "Heat pump, Req 30 amp circuit",
+      "order_of_completion": null,
+      "estimated_cost_usd": 3500,
+      "cost_formula": {
+        "type": "fixed",
+        "material_cost": 1750,
+        "notes": "Heat pump water heater requires 30 amp circuit."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["heat pump water heater", "hpwh", "electric water heater", "30 amp circuit", "water heater replacement"]
+    },
+    {
+      "id": "water-heater-recirculation",
+      "category": "Water Heater",
+      "sub_category": "Water Heater",
+      "sub_category_detail": null,
+      "action": "Recirculation",
+      "order_of_completion": null,
+      "estimated_cost_usd": null,
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["recirculation pump", "hot water recirculation", "instant hot water", "recirculating pump"]
+    },
+    {
+      "id": "water-heater-insulate-plumbing",
+      "category": "Water Heater",
+      "sub_category": "Water Heater",
+      "sub_category_detail": null,
+      "action": "Insulate plumbing",
+      "order_of_completion": null,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "fixed",
+        "material_cost": 30,
+        "notes": "Pipe insulation for hot water lines."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["insulate plumbing", "pipe insulation", "hot water pipe insulation", "plumbing insulation"]
+    },
+    {
+      "id": "electrical-panel-upgrade-replacement",
+      "category": "Electrical",
+      "sub_category": "Panel Upgrade",
+      "sub_category_detail": "Replacement",
+      "action": "Upg to 200amp",
+      "order_of_completion": null,
+      "estimated_cost_usd": 450,
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["panel upgrade", "200 amp panel", "electrical panel replacement", "upgrade to 200amp", "service upgrade"]
+    },
+    {
+      "id": "electrical-emu",
+      "category": "Electrical",
+      "sub_category": "EMU",
+      "sub_category_detail": null,
+      "action": null,
+      "order_of_completion": null,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "fixed",
+        "material_cost": 250,
+        "labor_cost": 150,
+        "notes": "Energy monitoring unit installation."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["emu", "energy monitoring unit", "energy monitor", "power monitor"]
     },
     {
       "id": "electrical-solar-optimization",
@@ -237,19 +370,29 @@
       "category": "Electrical",
       "sub_category": "Solar",
       "sub_category_detail": null,
-      "action": "Installation",
+      "action": "Install",
       "order_of_completion": 7,
       "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "ppa",
+        "upfront_cost": 0.00,
+        "ppa_rate_per_kwh": 0.32,
+        "contract_years": 25,
+        "notes": "PPA model: $0 upfront, $0.32/kWh for all generation. No ownership, no maintenance costs."
+      },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["solar installation", "install solar", "solar panels", "solar pv", "rooftop solar"]
+      "nem_version": "3.0",
+      "state": "CA",
+      "battery_recommended": true,
+      "keywords": ["solar installation", "install solar", "solar panels", "solar pv", "rooftop solar", "nem 3.0", "ppa", "battery storage"]
     },
     {
       "id": "electrical-appliances-fridge-replacement",
       "category": "Electrical",
       "sub_category": "Appliances",
       "sub_category_detail": "Fridge",
-      "action": "Replacement",
+      "action": "Replace",
       "order_of_completion": 2,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
@@ -257,47 +400,23 @@
       "keywords": ["refrigerator replacement", "replace fridge", "new refrigerator", "energy star fridge"]
     },
     {
-      "id": "electrical-appliances-oven-replacement",
+      "id": "electrical-appliances-oven-induction",
       "category": "Electrical",
       "sub_category": "Appliances",
       "sub_category_detail": "Oven",
-      "action": "Replacement",
+      "action": "Induction",
       "order_of_completion": 2,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["oven replacement", "replace oven", "induction range", "electric range", "stove replacement"]
-    },
-    {
-      "id": "electrical-appliances-water-heater-replacement",
-      "category": "Electrical",
-      "sub_category": "Appliances",
-      "sub_category_detail": "Water Heater",
-      "action": "Replacement",
-      "order_of_completion": 2,
-      "estimated_cost_usd": null,
-      "estimated_kwh_savings": null,
-      "rebate_eligible": false,
-      "keywords": ["water heater replacement", "replace water heater", "heat pump water heater", "tankless water heater", "new water heater"]
-    },
-    {
-      "id": "electrical-appliances-water-heater-optimization",
-      "category": "Electrical",
-      "sub_category": "Appliances",
-      "sub_category_detail": "Water Heater",
-      "action": "Optimization",
-      "order_of_completion": 2,
-      "estimated_cost_usd": null,
-      "estimated_kwh_savings": null,
-      "rebate_eligible": false,
-      "keywords": ["water heater optimization", "water heater insulation", "water heater blanket", "lower water heater temperature"]
+      "keywords": ["oven replacement", "replace oven", "induction range", "electric range", "stove replacement", "induction cooktop"]
     },
     {
       "id": "electrical-appliances-ev-replacement",
       "category": "Electrical",
       "sub_category": "Appliances",
       "sub_category_detail": "EV",
-      "action": "Replacement",
+      "action": "Replace",
       "order_of_completion": 2,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
@@ -314,14 +433,14 @@
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["lighting optimization", "smart lighting", "lighting controls", "dimmer switches", "occupancy sensors"]
+      "keywords": ["lighting optimization", "smart lighting", "lighting controls", "dimmer switches", "occupancy sensors", "sensing outdoor", "sensing indoor", "adjustable"]
     },
     {
       "id": "electrical-lighting-replacement",
       "category": "Electrical",
       "sub_category": "Lighting",
       "sub_category_detail": null,
-      "action": "Replacement",
+      "action": "Replace",
       "order_of_completion": 1,
       "estimated_cost_usd": null,
       "estimated_kwh_savings": null,
