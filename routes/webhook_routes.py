@@ -20,6 +20,7 @@ import hashlib
 import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
+from sqlalchemy import cast, String
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +394,7 @@ def handle_authorization_complete(event: dict) -> bool:
         # (for re-processing or duplicate webhooks)
         connection = UtilityConnection.query.filter(
             UtilityConnection.provider_name == 'utilityapi',
-            UtilityConnection.provider_metadata['authorization_uid'].astext == str(authorization_uid)
+            cast(UtilityConnection.provider_metadata['authorization_uid'], String) == str(authorization_uid)
         ).first()
         
         # Strategy 2: Find by referral (oauth_state) if provided
@@ -557,7 +558,7 @@ def handle_meter_created(event: dict) -> bool:
         # Find the connection by authorization_uid
         connection = UtilityConnection.query.filter(
             UtilityConnection.provider_name == 'utilityapi',
-            UtilityConnection.provider_metadata['authorization_uid'].astext == str(authorization_uid)
+            cast(UtilityConnection.provider_metadata['authorization_uid'], String) == str(authorization_uid)
         ).first()
         
         if not connection:
@@ -650,7 +651,7 @@ def handle_data_available(event: dict, event_type: str) -> bool:
             connection = UtilityConnection.query.filter(
                 UtilityConnection.provider_name == 'utilityapi',
                 UtilityConnection.status == 'connected',
-                UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
+                cast(UtilityConnection.provider_metadata['authorization_uid'], String) == str(authorization_uid)
             ).first()
         
         if not connection and referral:
@@ -738,7 +739,7 @@ def handle_authorization_revoked(event: dict) -> bool:
         # Search in provider_metadata JSONB field
         connection = UtilityConnection.query.filter(
             UtilityConnection.provider_name == 'utilityapi',
-            UtilityConnection.provider_metadata['authorization_uid'].astext == authorization_uid
+            cast(UtilityConnection.provider_metadata['authorization_uid'], String) == str(authorization_uid)
         ).first()
         
         if connection and connection.status != 'revoked':
