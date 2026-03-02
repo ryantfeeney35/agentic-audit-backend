@@ -119,7 +119,7 @@ class UtilityAPIProvider(UtilityProvider):
             )
         
         db = _get_db()
-        UtilityConnection, _, _ = _get_models()
+        UtilityConnection, _, _, _ = _get_models()
         
         try:
             # Generate unique reference ID for tracking
@@ -196,7 +196,7 @@ class UtilityAPIProvider(UtilityProvider):
             AuthResult indicating success/failure
         """
         db = _get_db()
-        UtilityConnection, _, _ = _get_models()
+        UtilityConnection, _, _, _ = _get_models()
         
         # UtilityAPI webhook provides authorization_uid and meters data
         authorization_uid = kwargs.get("authorization_uid")
@@ -543,7 +543,7 @@ class UtilityAPIProvider(UtilityProvider):
         Returns:
             UsageSummary or None if not available
         """
-        _, _, UtilityUsageSummary = _get_models()
+        _, _, UtilityUsageSummary, _ = _get_models()
         
         summary = UtilityUsageSummary.query.filter_by(
             connection_id=connection_id
@@ -575,7 +575,7 @@ class UtilityAPIProvider(UtilityProvider):
             True if revocation successful
         """
         db = _get_db()
-        UtilityConnection, _, _ = _get_models()
+        UtilityConnection, _, _, _ = _get_models()
         
         connection = UtilityConnection.query.get(connection_id)
         if not connection:
