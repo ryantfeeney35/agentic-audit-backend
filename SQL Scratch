@@ -83,6 +83,7 @@ update audit_media set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where au
 update audit_recommendations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
 update agent_conversations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
 
+select * from properties
 select * from utility_usage_summaries
 update utility_usage_summaries set audit_id = 102 where connection_id = 14;
 select * from utility_interval_data
