@@ -72,7 +72,9 @@ select * from audits where property_id = 71 order by created_at
 select * from audit_steps where audit_id = 22 and step_type = 'interview' order by created_at
 select * from properties where id = 62
 select * from Utility_Connections;
+delete from Utility_Connections;
 update Utility_Connections set audit_id = 102 where id = 14;
+select * from Utility_Connections;
 select * from utility_usage_data
 update utility_usage_data set audit_id = 102 where connection_id = 14;
 

@@ -918,6 +918,10 @@ class UtilityAPIProvider(UtilityProvider):
             logger.warning("Webhook secret not configured, skipping verification")
             return True
         
+        if not signature:
+            logger.warning("No signature provided in webhook request")
+            return False
+        
         import hmac
         import hashlib
         
