@@ -630,12 +630,17 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 continue
             
+            # Generate unique interval_uid per reading by appending start timestamp
+            parent_uid = interval_obj.get('uid', '')
+            # Create unique reading uid: {parent_uid}-{start_timestamp}
+            reading_uid = f"{parent_uid}-{start}" if parent_uid else start
+            
             result['intervals'].append({
                 'start': start,
                 'end': end,
                 'value': reading_value,
                 'unit': 'kWh',
-                'interval_uid': interval_obj.get('uid'),
+                'interval_uid': reading_uid,
             })
     
     # Sort billing periods by month
