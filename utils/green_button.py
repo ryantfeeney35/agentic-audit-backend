@@ -596,9 +596,17 @@ def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     # Structure: { uid, meter_uid, blocks: ["base", "readings"], readings: [{start, end, kwh, ...}, ...] }
     intervals = response_data.get('intervals', [])
     
+    logger.info(f"parse_aggregator_response: Processing {len(intervals)} interval objects")
+    
     for interval_obj in intervals:
         # 'readings' is a top-level list in the interval object
         readings = interval_obj.get('readings', [])
+        
+        # Debug log interval structure
+        if not readings:
+            logger.debug(f"Interval uid={interval_obj.get('uid')}: no readings, blocks={interval_obj.get('blocks', [])}, keys={list(interval_obj.keys())}")
+        else:
+            logger.debug(f"Interval uid={interval_obj.get('uid')}: {len(readings)} readings")
         
         # Handle case where readings might not be a list
         if not isinstance(readings, list):

@@ -318,6 +318,16 @@ class UtilityAPIProvider(UtilityProvider):
             intervals_response = self._fetch_intervals(authorization_uid)
             intervals_data = intervals_response.get("intervals", []) if intervals_response.get("success") else []
             
+            # Debug log the intervals structure
+            if intervals_data:
+                logger.info(f"UtilityAPI intervals: {len(intervals_data)} interval objects")
+                for i, interval_obj in enumerate(intervals_data[:2]):  # Log first 2
+                    logger.debug(f"Interval {i}: keys={list(interval_obj.keys())}, blocks={interval_obj.get('blocks', [])}")
+                    readings = interval_obj.get('readings', [])
+                    logger.debug(f"  readings count: {len(readings) if isinstance(readings, list) else 'not a list'}")
+            else:
+                logger.warning("UtilityAPI intervals: empty or not returned")
+            
             # Parse aggregator response
             parsed_data = parse_aggregator_response({
                 "bills": bills_data,
@@ -716,10 +726,14 @@ class UtilityAPIProvider(UtilityProvider):
         """
         try:
             # UtilityAPI uses query params: /intervals?authorizations=123
+            # Include expand=readings to get actual interval readings data
             response = requests.get(
                 f"{self.base_url}/intervals",
                 headers=self._get_headers(),
-                params={"authorizations": authorization_uid},
+                params={
+                    "authorizations": authorization_uid,
+                    "expand": "readings",  # Request expanded readings data
+                },
                 timeout=self.timeout,
             )
             
@@ -732,9 +746,17 @@ class UtilityAPIProvider(UtilityProvider):
                 return {"success": True, "intervals": []}  # Non-fatal
             
             data = response.json()
+            intervals = data.get("intervals", [])
+            
+            # Log raw response structure for debugging
+            logger.debug(f"UtilityAPI intervals raw: {len(intervals)} objects, top keys: {list(data.keys())}")
+            if intervals:
+                sample = intervals[0]
+                logger.debug(f"Sample interval keys: {list(sample.keys())}")
+            
             return {
                 "success": True,
-                "intervals": data.get("intervals", []),
+                "intervals": intervals,
             }
             
         except requests.RequestException as e:
