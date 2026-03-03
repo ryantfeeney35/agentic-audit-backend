@@ -315,7 +315,9 @@ class UtilityAPIProvider(UtilityProvider):
             bills_data = bills_response.get("bills", [])
             
             # Optionally fetch interval data if available
-            intervals_response = self._fetch_intervals(authorization_uid)
+            # Get meter_uids from metadata (stored when meter_created event is received)
+            meter_uids = connection.provider_metadata.get("meter_uids", [])
+            intervals_response = self._fetch_intervals(meter_uids)
             intervals_data = intervals_response.get("intervals", []) if intervals_response.get("success") else []
             
             # Debug log the intervals structure
@@ -714,25 +716,30 @@ class UtilityAPIProvider(UtilityProvider):
             logger.exception(f"Network error fetching UtilityAPI bills: {e}")
             return {"success": False, "error": f"Network error: {str(e)}"}
     
-    def _fetch_intervals(self, authorization_uid: str) -> Dict[str, Any]:
+    def _fetch_intervals(self, meter_uids: list) -> Dict[str, Any]:
         """
-        Fetch interval data for an authorization (if available).
+        Fetch interval data for meters (if available).
         
         Args:
-            authorization_uid: UtilityAPI authorization UID
+            meter_uids: List of UtilityAPI meter UIDs
             
         Returns:
             Dict with intervals list on success, error on failure
         """
+        if not meter_uids:
+            logger.debug("No meter_uids provided for intervals fetch")
+            return {"success": True, "intervals": []}
+        
         try:
-            # UtilityAPI uses query params: /intervals?authorizations=123
-            # Include expand=readings to get actual interval readings data
+            # UtilityAPI intervals endpoint uses meters param: /intervals?meters=123,456
+            meters_param = ",".join(str(uid) for uid in meter_uids)
+            logger.debug(f"Fetching intervals for meters: {meters_param}")
+            
             response = requests.get(
                 f"{self.base_url}/intervals",
                 headers=self._get_headers(),
                 params={
-                    "authorizations": authorization_uid,
-                    "expand": "readings",  # Request expanded readings data
+                    "meters": meters_param,
                 },
                 timeout=self.timeout,
             )
