@@ -323,11 +323,16 @@ class EnphaseClient:
         """
         logger.info("ENPHASE_GET_SYSTEMS | Fetching user systems")
         
+        url = f"{ENPHASE_API_BASE}/systems"
+        logger.info(f"ENPHASE_GET_SYSTEMS | url={url} api_key_set={bool(self._api_key)}")
+        
         response = self._api_request(
             "GET",
-            f"{ENPHASE_API_BASE}/systems",
+            url,
             access_token=access_token
         )
+        
+        logger.info(f"ENPHASE_GET_SYSTEMS | raw_response={response}")
         
         systems = []
         for sys_data in response.get("systems", []):
@@ -477,6 +482,8 @@ class EnphaseClient:
         
         last_exception = None
         
+        logger.info(f"ENPHASE_API_REQUEST | method={method} url={url} params={params}")
+        
         for attempt in range(self._max_retries):
             try:
                 response = self._session.request(
@@ -487,6 +494,8 @@ class EnphaseClient:
                     json=data,
                     timeout=60
                 )
+                
+                logger.info(f"ENPHASE_API_RESPONSE | status={response.status_code} body={response.text[:500] if response.text else 'empty'}")
                 
                 # Handle rate limiting
                 if response.status_code == 429:
