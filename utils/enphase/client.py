@@ -14,6 +14,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,8 @@ class EnphaseClient:
             "redirect_uri": self.redirect_uri,  # Must match Enphase portal registration
             "state": state,                # CSRF protection - stored in DB, validated on callback
         }
-        query = "&".join(f"{k}={v}" for k, v in params.items())
+        logger.info(f"ENPHASE_AUTH_URL | redirect_uri={self.redirect_uri}")
+        query = urlencode(params)  # Properly URL-encode params (especially redirect_uri)
         return f"{ENPHASE_AUTH_URL}?{query}"
     
     def exchange_code_for_tokens(self, code: str) -> EnphaseTokenResponse:
