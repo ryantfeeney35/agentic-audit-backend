@@ -95,7 +95,8 @@ class EnphaseClient:
         self,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        redirect_uri: Optional[str] = None
+        redirect_uri: Optional[str] = None,
+        api_key: Optional[str] = None
     ):
         """
         Initialize the Enphase client.
@@ -104,13 +105,15 @@ class EnphaseClient:
             client_id: Enphase OAuth client ID (defaults to env var)
             client_secret: Enphase OAuth client secret (defaults to env var)
             redirect_uri: OAuth redirect URI (defaults to env var)
+            api_key: Enphase API key for v4 API requests (defaults to env var)
         """
         self.client_id = client_id or os.environ.get("ENPHASE_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("ENPHASE_CLIENT_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get("ENPHASE_REDIRECT_URI")
+        self._api_key = api_key or os.environ.get("ENPHASE_API_KEY")
         
-        if not all([self.client_id, self.client_secret]):
-            raise ValueError("ENPHASE_CLIENT_ID and ENPHASE_CLIENT_SECRET must be set")
+        if not all([self.client_id, self.client_secret, self._api_key]):
+            raise ValueError("ENPHASE_CLIENT_ID, ENPHASE_CLIENT_SECRET, and ENPHASE_API_KEY must be set")
         
         self._session = requests.Session()
         self._max_retries = 3
@@ -457,11 +460,20 @@ class EnphaseClient:
         Make an authenticated API request with retry and rate limit handling.
         
         Implements exponential backoff for rate limits and transient errors.
+        
+        Note: Enphase API v4 requires BOTH:
+        - Authorization header with Bearer token (OAuth)
+        - API key as query parameter (key=client_id)
         """
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
         }
+        
+        # Enphase API v4 requires API key in query params alongside OAuth token
+        if params is None:
+            params = {}
+        params["key"] = self._api_key
         
         last_exception = None
         
