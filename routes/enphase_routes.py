@@ -89,7 +89,7 @@ def initiate_connection():
                 client = get_enphase_client()
                 auth_url = client.get_authorization_url(existing.oauth_state)
                 return jsonify({
-                    'auth_url': auth_url,
+                    'authorization_url': auth_url,
                     'state': existing.oauth_state,
                     'connection_id': existing.id
                 }), 200
@@ -118,7 +118,7 @@ def initiate_connection():
         )
         
         return jsonify({
-            'auth_url': auth_url,
+            'authorization_url': auth_url,
             'state': oauth_state,
             'connection_id': connection.id
         }), 200

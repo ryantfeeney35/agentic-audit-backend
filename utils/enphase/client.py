@@ -120,17 +120,34 @@ class EnphaseClient:
         """
         Generate the OAuth authorization URL for user redirect.
         
+        This is Step 1 of the OAuth 2.0 Authorization Code flow:
+        1. Generate auth URL with state parameter → redirect user to Enphase
+        2. User authorizes access on Enphase website
+        3. Enphase redirects back to our callback with authorization code
+        4. We exchange code for access/refresh tokens (see exchange_code_for_tokens)
+        
         Args:
-            state: CSRF protection state parameter
+            state: CSRF protection state parameter. This value is stored in the
+                   EnphaseConnection.oauth_state field when creating the pending
+                   connection. When Enphase redirects back, we verify that the
+                   returned state matches to prevent CSRF attacks.
             
         Returns:
-            Full authorization URL to redirect user to
+            Full authorization URL to redirect user to. The URL opens Enphase's
+            OAuth consent screen where the user can authorize our app to access
+            their system data.
+        
+        Security Notes:
+            - State parameter must be cryptographically random (use secrets.token_urlsafe)
+            - State is single-use and should be cleared after successful token exchange
+            - Redirect URI must exactly match what's registered in Enphase portal
         """
+        # Build OAuth authorization request parameters per RFC 6749 Section 4.1.1
         params = {
-            "response_type": "code",
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "state": state,
+            "response_type": "code",       # Request authorization code (not implicit token)
+            "client_id": self.client_id,   # Our registered application ID
+            "redirect_uri": self.redirect_uri,  # Must match Enphase portal registration
+            "state": state,                # CSRF protection - stored in DB, validated on callback
         }
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{ENPHASE_AUTH_URL}?{query}"
@@ -139,21 +156,44 @@ class EnphaseClient:
         """
         Exchange authorization code for access and refresh tokens.
         
+        This is Step 4 of the OAuth 2.0 Authorization Code flow:
+        After the user authorizes on Enphase and is redirected back to our
+        callback URL with an authorization code, we exchange that short-lived
+        code for long-lived access and refresh tokens.
+        
+        Token Lifecycle:
+            - Access token: Short-lived (typically 24 hours), used for API calls
+            - Refresh token: Long-lived, used to obtain new access tokens
+            - Both tokens must be stored encrypted (see EnphaseConnection model)
+        
         Args:
-            code: Authorization code from OAuth callback
+            code: Authorization code from OAuth callback query parameter.
+                  This code is single-use and expires quickly (usually 10 min).
             
         Returns:
-            EnphaseTokenResponse with tokens and expiration
+            EnphaseTokenResponse containing:
+                - access_token: Bearer token for API authentication
+                - refresh_token: Token for obtaining new access tokens
+                - expires_in: Access token lifetime in seconds
             
         Raises:
-            EnphaseAuthError: If token exchange fails
+            EnphaseAuthError: If token exchange fails. Common causes:
+                - Code already used or expired
+                - Redirect URI mismatch
+                - Invalid client credentials
+        
+        Security Notes:
+            - This request uses HTTP Basic Auth with client_id:client_secret
+            - Code should only be exchanged once; discard after success or failure
+            - Store tokens encrypted at rest using TOKEN_ENCRYPTION_KEY
         """
         logger.info("ENPHASE_TOKEN_EXCHANGE | Exchanging authorization code for tokens")
         
+        # Build token request per OAuth 2.0 spec (RFC 6749 Section 4.1.3)
         data = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": self.redirect_uri,
+            "grant_type": "authorization_code",  # Identifies this as code exchange
+            "code": code,                         # The authorization code from callback
+            "redirect_uri": self.redirect_uri,   # Must match the original auth request
         }
         
         try:
@@ -188,22 +228,45 @@ class EnphaseClient:
     
     def refresh_access_token(self, refresh_token: str) -> EnphaseTokenResponse:
         """
-        Refresh an expired access token.
+        Refresh an expired access token using the refresh token.
+        
+        Token Refresh Strategy:
+            Access tokens expire after ~24 hours. Before making API calls, check
+            if the token is expired or will expire soon (within 5 minutes). If so,
+            call this method to obtain a fresh access token.
+        
+        When to Refresh:
+            - Before API calls when token_expires_at < now + 5 minutes
+            - After receiving 401 Unauthorized from an API call
+            - Proactively during sync operations to avoid mid-sync expiration
         
         Args:
-            refresh_token: Valid refresh token
+            refresh_token: The refresh token from the original OAuth exchange or
+                           previous refresh. Stored encrypted in EnphaseConnection.
             
         Returns:
-            EnphaseTokenResponse with new tokens
-            
+            EnphaseTokenResponse containing:
+                - access_token: New bearer token for API calls
+                - refresh_token: New refresh token (may be rotated)
+                - expires_in: New token lifetime in seconds
+        
         Raises:
-            EnphaseAuthError: If refresh fails (token may be revoked)
+            EnphaseAuthError: If refresh fails. Causes include:
+                - User revoked access from Enphase portal
+                - Refresh token expired (very long inactivity)
+                - Application credentials changed
+        
+        Important:
+            - On 401, mark connection as 'requires_reauthorization' status
+            - User must re-authorize through OAuth flow to restore access
+            - Always store the new refresh_token (it may be rotated)
         """
         logger.info("ENPHASE_TOKEN_REFRESH | Refreshing access token")
         
+        # Build refresh request per OAuth 2.0 spec (RFC 6749 Section 6)
         data = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",   # Identifies this as a refresh request
+            "refresh_token": refresh_token,  # The stored refresh token
         }
         
         try:
