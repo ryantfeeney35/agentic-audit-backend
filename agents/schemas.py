@@ -354,6 +354,32 @@ class SolarInfo(BaseModel):
     has_battery: Optional[bool] = Field(default=None, description="Whether battery storage is present")
 
 
+class EnphaseTelemetrySummarySchema(BaseModel):
+    """Summary of Enphase solar production telemetry data."""
+    system_id: str = Field(..., description="Enphase system ID")
+    system_name: Optional[str] = Field(default=None, description="User-defined system name")
+    system_size_kw: Optional[float] = Field(default=None, description="System size in kW")
+    has_battery: Optional[bool] = Field(default=None, description="Whether battery storage is present")
+    data_period: Optional[dict] = Field(
+        default=None,
+        description="Data period: {start: YYYY-MM-DD, end: YYYY-MM-DD}",
+    )
+    total_production_kwh: Optional[float] = Field(default=None, description="Total production in kWh")
+    total_consumption_kwh: Optional[float] = Field(default=None, description="Total consumption in kWh")
+    total_grid_import_kwh: Optional[float] = Field(default=None, description="Grid import in kWh")
+    total_grid_export_kwh: Optional[float] = Field(default=None, description="Grid export in kWh")
+    total_battery_charge_kwh: Optional[float] = Field(default=None, description="Battery charge in kWh")
+    total_battery_discharge_kwh: Optional[float] = Field(default=None, description="Battery discharge in kWh")
+    self_consumption_ratio: Optional[float] = Field(
+        default=None,
+        description="Ratio of solar production consumed on-site (0-1)",
+    )
+    average_daily_production_kwh: Optional[float] = Field(default=None, description="Average daily production")
+    average_daily_consumption_kwh: Optional[float] = Field(default=None, description="Average daily consumption")
+    interval_count: Optional[int] = Field(default=None, description="Number of data intervals")
+
+
+
 class UtilityUsageSummarySchema(BaseModel):
     """Schema for utility usage data passed to Energy Usage Agent."""
     fuel_type: str = Field(..., description="electric, gas, or both")
@@ -405,6 +431,10 @@ class EnergyUsageAnalysisInput(BaseModel):
     solar_info: Optional[SolarInfo] = Field(
         default=None,
         description="Existing solar installation info",
+    )
+    enphase_telemetry: Optional[EnphaseTelemetrySummarySchema] = Field(
+        default=None,
+        description="Enphase solar production telemetry data if connected",
     )
     occupancy_info: Optional[OccupancyInfo] = Field(
         default=None,

@@ -502,3 +502,137 @@ class ExportRateSchedule(db.Model):
     __table_args__ = (
         db.Index('ix_export_rate_utility_date', 'utility', 'effective_date'),
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Enphase Connection & Telemetry Models
+# ──────────────────────────────────────────────────────────────────────────────
+
+class EnphaseConnection(db.Model):
+    """
+    Tracks an Enphase API connection for an audit.
+    
+    Stores OAuth tokens and system metadata for fetching solar production,
+    consumption, battery, and grid telemetry data from Enphase systems.
+    """
+    __tablename__ = "enphase_connections"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    property_id = db.Column(db.Integer, db.ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
+    
+    # Enphase system identification
+    system_id = db.Column(db.String(50), nullable=True)  # Primary Enphase system ID
+    system_name = db.Column(db.String(255), nullable=True)  # User-defined system name
+    
+    # Connection status
+    status = db.Column(db.String(30), default='not_connected')
+    # Possible values: 'not_connected', 'pending_authorization', 'connected', 
+    #                  'sync_in_progress', 'failed', 'requires_reauthorization', 'disconnected'
+    
+    # OAuth tokens (encrypted)
+    access_token_enc = db.Column(db.Text, nullable=True)
+    refresh_token_enc = db.Column(db.Text, nullable=True)
+    token_expires_at = db.Column(db.DateTime, nullable=True)
+    
+    # OAuth state for security validation (CSRF protection)
+    oauth_state = db.Column(db.String(255), nullable=True)
+    
+    # Provider-specific metadata (e.g., all system IDs if multiple, equipment info)
+    provider_metadata = db.Column(JSONB, default=dict)
+    
+    # Sync timestamps
+    last_sync_at = db.Column(db.DateTime, nullable=True)
+    last_sync_error = db.Column(db.Text, nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    audit = relationship("Audit", backref="enphase_connections")
+    telemetry_data = relationship("EnphaseTelemetryInterval", back_populates="connection", cascade="all, delete-orphan")
+
+    @property
+    def access_token(self):
+        """Decrypt and return access token."""
+        if not self.access_token_enc:
+            return None
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.access_token_enc)
+    
+    @access_token.setter
+    def access_token(self, value):
+        """Encrypt and store access token."""
+        if value is None:
+            self.access_token_enc = None
+        else:
+            from utils.encryption import encrypt_token
+            self.access_token_enc = encrypt_token(value)
+    
+    @property
+    def refresh_token(self):
+        """Decrypt and return refresh token."""
+        if not self.refresh_token_enc:
+            return None
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.refresh_token_enc)
+    
+    @refresh_token.setter
+    def refresh_token(self, value):
+        """Encrypt and store refresh token."""
+        if value is None:
+            self.refresh_token_enc = None
+        else:
+            from utils.encryption import encrypt_token
+            self.refresh_token_enc = encrypt_token(value)
+
+
+class EnphaseTelemetryInterval(db.Model):
+    """
+    High-resolution telemetry data from Enphase systems.
+    
+    Stores granular interval data (typically 15-minute) including production,
+    consumption, battery state, and grid import/export metrics.
+    
+    Note: This can generate many records (35,040 per year for 15-min intervals).
+    Consider periodic cleanup or aggregation for older data.
+    """
+    __tablename__ = "enphase_telemetry_intervals"
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+    property_id = db.Column(db.Integer, db.ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
+    connection_id = db.Column(db.Integer, db.ForeignKey("enphase_connections.id", ondelete="CASCADE"), nullable=False)
+    system_id = db.Column(db.String(50), nullable=False)  # Enphase system ID
+    
+    # Interval timing
+    interval_start = db.Column(db.DateTime, nullable=False)
+    interval_end = db.Column(db.DateTime, nullable=False)
+    granularity = db.Column(db.String(10), nullable=False, default='15m')  # '5m', '15m', 'hourly', 'daily'
+    
+    # Telemetry data (all in kWh for the interval, nullable for partial equipment)
+    production_kwh = db.Column(db.Float, nullable=True)  # Solar production
+    consumption_kwh = db.Column(db.Float, nullable=True)  # Home consumption (if CTs installed)
+    grid_import_kwh = db.Column(db.Float, nullable=True)  # Energy drawn from grid
+    grid_export_kwh = db.Column(db.Float, nullable=True)  # Energy exported to grid
+    battery_charge_kwh = db.Column(db.Float, nullable=True)  # Battery charging
+    battery_discharge_kwh = db.Column(db.Float, nullable=True)  # Battery discharging
+    
+    # Raw API response (for debugging/reprocessing)
+    raw_payload = db.Column(JSONB, nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    connection = relationship("EnphaseConnection", back_populates="telemetry_data")
+    audit = relationship("Audit", backref="enphase_telemetry_records")
+
+    # Index for efficient querying by connection and time range
+    __table_args__ = (
+        db.Index('ix_enphase_telemetry_connection_time', 'connection_id', 'interval_start'),
+        db.UniqueConstraint('connection_id', 'interval_start', name='uq_enphase_telemetry_connection_interval'),
+    )
