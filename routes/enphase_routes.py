@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Blueprint for Enphase-specific routes
 enphase_bp = Blueprint('enphase', __name__, url_prefix='/api/enphase')
 
-# Blueprint for audit-scoped Enphase routes
+# Blueprint for audit-scoped Enphase route
 audit_enphase_bp = Blueprint('audit_enphase', __name__, url_prefix='/api/audits')
 
 
