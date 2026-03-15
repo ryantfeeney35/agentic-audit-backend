@@ -2,7 +2,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from collections import defaultdict
-from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary, UtilityIntervalData, db
+from models import Audit, AuditStep, UtilityConnection, UtilityUsageSummary, UtilityIntervalData, EnphaseConnection, EnphaseTelemetryInterval, db
 from memory.config import memory_enabled, semantic_enabled, semantic_top_k, context_char_cap
 from memory.semantic import retrieve_relevant_snippets
 from memory.chat_memory import get_recent_messages
@@ -12,6 +12,7 @@ from agents.schemas import (
     OccupancyInfo,
     ApplianceItem,
     SolarInfo,
+    EnphaseTelemetrySummarySchema,
 )
 import logging
 
@@ -235,6 +236,127 @@ def _summarize_interval_data(connection_id: int) -> tuple[Optional[Dict[str, Any
     return interval_summary, daily_profiles
 
 
+def _get_enphase_telemetry_summary(audit_id: int) -> Optional[EnphaseTelemetrySummarySchema]:
+    """
+    Get Enphase telemetry summary for the Energy Usage Agent.
+    
+    Queries EnphaseConnection and EnphaseTelemetryInterval to build aggregated
+    solar production/consumption statistics.
+    
+    Args:
+        audit_id: The audit ID
+        
+    Returns:
+        EnphaseTelemetrySummarySchema if Enphase is connected with data, None otherwise
+    """
+    try:
+        connection = EnphaseConnection.query.filter_by(
+            audit_id=audit_id,
+            status='active'
+        ).first()
+    except Exception as e:
+        logger.warning("Failed to query Enphase connection: %s", e)
+        return None
+    
+    if not connection:
+        return None
+    
+    # Get telemetry intervals
+    intervals = EnphaseTelemetryInterval.query.filter_by(
+        connection_id=connection.id
+    ).order_by(EnphaseTelemetryInterval.interval_start).all()
+    
+    if not intervals:
+        # Return basic system info even without telemetry data
+        system_size_kw = None
+        has_battery = None
+        if connection.provider_metadata:
+            size_w = connection.provider_metadata.get('size_w')
+            system_size_kw = size_w / 1000 if size_w else None
+            has_battery = connection.provider_metadata.get('battery_count', 0) > 0
+        
+        return EnphaseTelemetrySummarySchema(
+            system_id=connection.system_id,
+            system_name=connection.system_name,
+            system_size_kw=system_size_kw,
+            has_battery=has_battery,
+            interval_count=0,
+        )
+    
+    logger.info(f"Summarizing {len(intervals)} Enphase intervals for audit {audit_id}")
+    
+    # Aggregate telemetry data
+    total_production = 0.0
+    total_consumption = 0.0
+    total_grid_import = 0.0
+    total_grid_export = 0.0
+    total_battery_charge = 0.0
+    total_battery_discharge = 0.0
+    min_date = None
+    max_date = None
+    
+    for interval in intervals:
+        if interval.production_kwh:
+            total_production += interval.production_kwh
+        if interval.consumption_kwh:
+            total_consumption += interval.consumption_kwh
+        if interval.grid_import_kwh:
+            total_grid_import += interval.grid_import_kwh
+        if interval.grid_export_kwh:
+            total_grid_export += interval.grid_export_kwh
+        if interval.battery_charge_kwh:
+            total_battery_charge += interval.battery_charge_kwh
+        if interval.battery_discharge_kwh:
+            total_battery_discharge += interval.battery_discharge_kwh
+        
+        if min_date is None or interval.interval_start < min_date:
+            min_date = interval.interval_start
+        if max_date is None or interval.interval_end > max_date:
+            max_date = interval.interval_end
+    
+    # Calculate derived metrics
+    data_period = None
+    days = 1
+    if min_date and max_date:
+        data_period = {
+            "start": min_date.strftime("%Y-%m-%d"),
+            "end": max_date.strftime("%Y-%m-%d"),
+        }
+        days = max((max_date - min_date).days, 1)
+    
+    # Self-consumption ratio: (production - export) / production
+    self_consumption_ratio = None
+    if total_production > 0:
+        self_consumed = total_production - total_grid_export
+        self_consumption_ratio = round(max(0, self_consumed) / total_production, 3)
+    
+    # System info from connection metadata
+    system_size_kw = None
+    has_battery = None
+    if connection.provider_metadata:
+        size_w = connection.provider_metadata.get('size_w')
+        system_size_kw = size_w / 1000 if size_w else None
+        has_battery = connection.provider_metadata.get('battery_count', 0) > 0
+    
+    return EnphaseTelemetrySummarySchema(
+        system_id=connection.system_id,
+        system_name=connection.system_name,
+        system_size_kw=system_size_kw,
+        has_battery=has_battery,
+        data_period=data_period,
+        total_production_kwh=round(total_production, 2),
+        total_consumption_kwh=round(total_consumption, 2) if total_consumption > 0 else None,
+        total_grid_import_kwh=round(total_grid_import, 2) if total_grid_import > 0 else None,
+        total_grid_export_kwh=round(total_grid_export, 2) if total_grid_export > 0 else None,
+        total_battery_charge_kwh=round(total_battery_charge, 2) if total_battery_charge > 0 else None,
+        total_battery_discharge_kwh=round(total_battery_discharge, 2) if total_battery_discharge > 0 else None,
+        self_consumption_ratio=self_consumption_ratio,
+        average_daily_production_kwh=round(total_production / days, 2),
+        average_daily_consumption_kwh=round(total_consumption / days, 2) if total_consumption > 0 else None,
+        interval_count=len(intervals),
+    )
+
+
 def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput]:
     """Build EnergyUsageAnalysisInput context for the Energy Usage Agent.
     
@@ -411,12 +533,25 @@ def get_energy_usage_context(audit_id: int) -> Optional[EnergyUsageAnalysisInput
     if audit.property and audit.property.sqft:
         home_sqft = audit.property.sqft
     
+    # Get Enphase telemetry summary if connected
+    enphase_telemetry = _get_enphase_telemetry_summary(audit_id)
+    
+    # If we have Enphase data but no solar_info yet, populate it from Enphase
+    if enphase_telemetry and not solar_info:
+        solar_info = SolarInfo(
+            has_solar=True,
+            system_size_kw=enphase_telemetry.system_size_kw,
+            annual_production_kwh=enphase_telemetry.total_production_kwh,
+            has_battery=enphase_telemetry.has_battery,
+        )
+    
     # Build the complete input context
     return EnergyUsageAnalysisInput(
         utility_summary=utility_schema,
         appliance_inventory=appliance_inventory,
         hvac_summary=hvac_summary,
         solar_info=solar_info,
+        enphase_telemetry=enphase_telemetry,
         occupancy_info=occupancy_info,
         comfort_issues=comfort_issues,
         climate_zone=climate_zone,

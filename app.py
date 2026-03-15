@@ -72,6 +72,13 @@ def create_app(test_config: Optional[Dict] = None) -> Flask:
     app.config.from_mapping(
         SQLALCHEMY_DATABASE_URI=_normalize_database_url(os.getenv("DATABASE_URL")),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        # Connection pool settings to handle dropped connections gracefully
+        SQLALCHEMY_ENGINE_OPTIONS={
+            "pool_pre_ping": True,  # Test connections before use, reconnect if stale
+            "pool_recycle": 300,    # Recycle connections after 5 minutes
+            "pool_size": 5,         # Default pool size
+            "max_overflow": 10,     # Allow up to 10 additional connections under load
+        },
         UTILITYAPI_WEBHOOK_SECRET=os.getenv("UTILITYAPI_WEBHOOK_SECRET"),
     )
 
@@ -115,9 +122,29 @@ def create_app(test_config: Optional[Dict] = None) -> Flask:
         except Exception:
             pass
 
+    @app.errorhandler(404)
+    def handle_not_found(e):
+        """Handle 404 errors - don't log as exceptions."""
+        return jsonify({"error": "Not found"}), 404
+
+    @app.errorhandler(405)
+    def handle_method_not_allowed(e):
+        """Handle 405 errors - don't log as exceptions."""
+        return jsonify({"error": "Method not allowed"}), 405
+
+    @app.route('/robots.txt')
+    def robots_txt():
+        """Serve robots.txt for web crawlers."""
+        return "User-agent: *\nDisallow: /api/\n", 200, {'Content-Type': 'text/plain'}
+
     @app.errorhandler(Exception)
     def handle_exception(e):
         """Global exception handler - logs and reports all unhandled exceptions."""
+        # Don't log HTTP exceptions (they're handled by specific handlers above)
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return jsonify({"error": e.description}), e.code
+            
         # Log the full traceback
         logging.exception("Unhandled exception occurred")
         

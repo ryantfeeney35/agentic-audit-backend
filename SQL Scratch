@@ -74,7 +74,6 @@ select * from properties where id = 62
 select * from Utility_Connections;
 delete from Utility_Connections;
 update Utility_Connections set audit_id = 102 where id = 14;
-select * from Utility_Connections;
 select * from utility_usage_data
 update utility_usage_data set audit_id = 102 where connection_id = 14;
 
@@ -86,9 +85,18 @@ update audit_recommendations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62
 update agent_conversations set user_id = 'd18a9cd4-08b8-4123-8c4e-b17c90adaa62' where audit_id in (select id from audits where property_id = 27);
 
 select * from properties
-select * from utility_usage_summaries
-update utility_usage_summaries set audit_id = 102 where connection_id = 14;
-select * from utility_interval_data
+select * from Utility_Connections;
+select * from utility_usage_data;
+select * from utility_usage_summaries;
+select * from utility_interval_data;
+
+
+delete from Utility_Connections;
+delete from utility_usage_data;
+delete from utility_usage_summaries;
+delete from utility_interval_data;
+
+delete from Utility_Connections
 
 INSERT INTO contractors (name, contact, step_type)
 VALUES 
@@ -106,3 +114,4 @@ select * from audit_room
 delete from users where id = 'f7c66593-dab8-4990-81ed-cd714dbe1430'
 
 select * from audit_recommendations
+delete from audit_recommendations where audit_id = 30
