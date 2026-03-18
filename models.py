@@ -37,6 +37,10 @@ class Property(db.Model):
     year_built = db.Column(db.Integer)
     sqft = db.Column(db.Integer, nullable=True)
     property_type = db.Column(db.String, nullable=False)
+    
+    # Homeowner portal fields
+    phone_number = db.Column(db.String(20), nullable=True)
+    google_place_id = db.Column(db.String(255), nullable=True, index=True)
 
     # Relationships
     user = relationship("User", back_populates="properties")
@@ -622,6 +626,9 @@ class EnphaseTelemetryInterval(db.Model):
     
     # Raw API response (for debugging/reprocessing)
     raw_payload = db.Column(JSONB, nullable=True)
+    
+    # Data source: 'api' for Enphase API sync, 'spreadsheet' for CSV import
+    source = db.Column(db.String(20), nullable=False, default='api')
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
