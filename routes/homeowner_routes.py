@@ -558,3 +558,101 @@ def upload_enphase_csv():
         db.session.rollback()
         logging.error(f"Enphase CSV upload error: {e}")
         return jsonify({'error': 'Failed to process Enphase CSV'}), 500
+
+
+@bp.route('/homeowner/enphase/connect', methods=['POST'])
+@require_homeowner_auth
+def homeowner_enphase_connect():
+    """
+    POST /api/homeowner/enphase/connect
+
+    Initiate Enphase OAuth authorization flow for the homeowner portal.
+    Mirrors /api/enphase/connect but uses homeowner JWT auth instead of
+    Supabase auditor auth.
+
+    Returns:
+        200: { authorization_url, state, connection_id }
+        404: No audit found for property
+        409: Active connection already exists
+        500: Server error
+    """
+    import secrets
+    from utils.enphase import EnphaseClient
+
+    try:
+        property = Property.query.get(g.homeowner_property_id)
+        if not property:
+            return jsonify({'error': 'Property not found'}), 404
+
+        # Find the audit for this property (prefer in_progress, fall back to most recent)
+        audit = Audit.query.filter_by(
+            property_id=property.id,
+            status='in_progress'
+        ).first()
+
+        if not audit:
+            audit = Audit.query.filter_by(property_id=property.id).order_by(
+                Audit.created_at.desc()
+            ).first()
+
+        if not audit:
+            return jsonify({'error': 'No audit found for this property'}), 404
+
+        # Check for existing active connection
+        existing = EnphaseConnection.query.filter_by(
+            audit_id=audit.id
+        ).filter(
+            EnphaseConnection.status.in_(['connected', 'pending_authorization', 'sync_in_progress'])
+        ).first()
+
+        if existing:
+            if existing.status == 'connected':
+                return jsonify({
+                    'error': 'Active Enphase connection already exists',
+                    'connection_id': existing.id,
+                    'status': existing.status
+                }), 409
+            elif existing.status == 'pending_authorization':
+                # Return existing pending auth URL
+                client = EnphaseClient()
+                auth_url = client.get_authorization_url(existing.oauth_state)
+                return jsonify({
+                    'authorization_url': auth_url,
+                    'state': existing.oauth_state,
+                    'connection_id': existing.id
+                }), 200
+
+        # Generate CSRF state token
+        oauth_state = secrets.token_urlsafe(32)
+
+        # Create pending connection with portal source marker
+        connection = EnphaseConnection(
+            user_id=audit.user_id,
+            audit_id=audit.id,
+            property_id=property.id,
+            status='pending_authorization',
+            oauth_state=oauth_state,
+            provider_metadata={'source': 'portal'}
+        )
+        db.session.add(connection)
+        db.session.commit()
+
+        # Generate authorization URL
+        client = EnphaseClient()
+        auth_url = client.get_authorization_url(oauth_state)
+
+        logging.info(
+            f"Homeowner Enphase connect: property_id={property.id}, "
+            f"audit_id={audit.id}, connection_id={connection.id}"
+        )
+
+        return jsonify({
+            'authorization_url': auth_url,
+            'state': oauth_state,
+            'connection_id': connection.id
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Homeowner Enphase connect error: {e}")
+        return jsonify({'error': 'Failed to initiate Enphase connection'}), 500

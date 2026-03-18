@@ -143,6 +143,17 @@ def oauth_callback():
     - error: Error code if authorization failed
     - error_description: Human-readable error message
     """
+    def _redirect_url(connection, **params):
+        """Build redirect URL based on connection source (mobile app vs portal)."""
+        is_portal = (
+            connection is not None
+            and isinstance(connection.provider_metadata, dict)
+            and connection.provider_metadata.get('source') == 'portal'
+        )
+        base = "/homeowner/solar/connect" if is_portal else "/enphase/callback"
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        return f"{base}?{qs}" if qs else base
+
     try:
         # Check for OAuth error
         error = request.args.get('error')
@@ -152,6 +163,7 @@ def oauth_callback():
             
             logger.warning(f"ENPHASE_OAUTH_ERROR | error={error} description={error_description}")
             
+            connection = None
             # Update connection status if we can find it
             if state:
                 connection = EnphaseConnection.query.filter_by(oauth_state=state).first()
@@ -160,8 +172,8 @@ def oauth_callback():
                     connection.last_sync_error = f"{error}: {error_description}"
                     db.session.commit()
             
-            # Redirect to app with error
-            return redirect(f"/enphase/callback?error={error}&description={error_description}")
+            # Redirect with error
+            return redirect(_redirect_url(connection, error=error, description=error_description))
         
         # Get authorization code and state
         code = request.args.get('code')
@@ -179,7 +191,7 @@ def oauth_callback():
         
         if connection.status != 'pending_authorization':
             logger.warning(f"ENPHASE_OAUTH_CALLBACK_DUPLICATE | connection={connection.id}")
-            return redirect(f"/enphase/callback?success=true&connection_id={connection.id}")
+            return redirect(_redirect_url(connection, success="true", connection_id=connection.id))
         
         # Exchange code for tokens
         client = get_enphase_client()
@@ -190,13 +202,17 @@ def oauth_callback():
             connection.status = 'failed'
             connection.last_sync_error = str(e)
             db.session.commit()
-            return redirect(f"/enphase/callback?error=token_exchange_failed&description={e}")
+            return redirect(_redirect_url(connection, error="token_exchange_failed", description=str(e)))
         
         # Store encrypted tokens
         connection.access_token = tokens.access_token
         connection.refresh_token = tokens.refresh_token
         connection.token_expires_at = tokens.expires_at
         connection.oauth_state = None  # Clear state after use
+        
+        # Preserve source in metadata when updating with system info
+        existing_metadata = connection.provider_metadata or {}
+        source = existing_metadata.get('source')
         
         # Discover systems
         try:
@@ -207,7 +223,7 @@ def oauth_callback():
                 connection.status = 'failed'
                 connection.last_sync_error = "No Enphase systems found"
                 db.session.commit()
-                return redirect("/enphase/callback?error=no_systems&description=No+Enphase+systems+found")
+                return redirect(_redirect_url(connection, error="no_systems", description="No+Enphase+systems+found"))
             
             # Use first system as primary, store all in metadata
             primary_system = systems[0]
@@ -222,7 +238,8 @@ def oauth_callback():
                         'timezone': s.timezone
                     } for s in systems
                 ],
-                'primary_system': primary_system.system_id
+                'primary_system': primary_system.system_id,
+                **(({'source': source} if source else {}))
             }
             connection.status = 'connected'
             
@@ -239,8 +256,8 @@ def oauth_callback():
         
         db.session.commit()
         
-        # Redirect to app with success
-        return redirect(f"/enphase/callback?success=true&connection_id={connection.id}")
+        # Redirect based on source
+        return redirect(_redirect_url(connection, success="true", connection_id=connection.id))
         
     except Exception as e:
         logger.error(f"ENPHASE_OAUTH_CALLBACK_ERROR | error={e}")
