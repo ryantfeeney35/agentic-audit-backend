@@ -594,16 +594,10 @@ def homeowner_enphase_connect():
         if not property:
             return jsonify({'error': 'Property not found'}), 404
 
-        # Find the audit for this property (prefer in_progress, fall back to most recent)
-        audit = Audit.query.filter_by(
-            property_id=property.id,
-            status='in_progress'
+        # Find the most recent audit for this property
+        audit = Audit.query.filter_by(property_id=property.id).order_by(
+            Audit.created_at.desc()
         ).first()
-
-        if not audit:
-            audit = Audit.query.filter_by(property_id=property.id).order_by(
-                Audit.created_at.desc()
-            ).first()
 
         if not audit:
             return jsonify({'error': 'No audit found for this property'}), 404
@@ -696,16 +690,10 @@ def homeowner_utility_connect():
         if not property:
             return jsonify({'error': 'Property not found'}), 404
 
-        # Find the audit for this property
-        audit = Audit.query.filter_by(
-            property_id=property.id,
-            status='in_progress'
+        # Find the most recent audit for this property
+        audit = Audit.query.filter_by(property_id=property.id).order_by(
+            Audit.created_at.desc()
         ).first()
-
-        if not audit:
-            audit = Audit.query.filter_by(property_id=property.id).order_by(
-                Audit.created_at.desc()
-            ).first()
 
         if not audit:
             return jsonify({'error': 'No audit found for this property'}), 404
