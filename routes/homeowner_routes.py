@@ -656,3 +656,108 @@ def homeowner_enphase_connect():
         db.session.rollback()
         logging.error(f"Homeowner Enphase connect error: {e}")
         return jsonify({'error': 'Failed to initiate Enphase connection'}), 500
+
+
+@bp.route('/homeowner/utility/connect', methods=['POST'])
+@require_homeowner_auth
+def homeowner_utility_connect():
+    """
+    POST /api/homeowner/utility/connect
+
+    Initiate utility data connection for the homeowner portal.
+    Mirrors /api/utility/connect but uses homeowner JWT auth.
+
+    Body (optional):
+    {
+        "utility_name": "SDGE",   // defaults to "SDGE"
+        "data_scope": "electric"  // defaults to "electric"
+    }
+
+    Returns:
+        200: { auth_url, state, connection_id, requires_redirect, provider_used }
+        404: No audit found for property
+        409: Active connection already exists
+        500: Server error
+    """
+    from utils.providers.registry import get_registry
+
+    try:
+        property = Property.query.get(g.homeowner_property_id)
+        if not property:
+            return jsonify({'error': 'Property not found'}), 404
+
+        # Find the audit for this property
+        audit = Audit.query.filter_by(
+            property_id=property.id,
+            status='in_progress'
+        ).first()
+
+        if not audit:
+            audit = Audit.query.filter_by(property_id=property.id).order_by(
+                Audit.created_at.desc()
+            ).first()
+
+        if not audit:
+            return jsonify({'error': 'No audit found for this property'}), 404
+
+        data = request.get_json() or {}
+        utility_name = data.get('utility_name', 'SDGE').upper()
+        data_scope = data.get('data_scope', 'electric')
+
+        if data_scope not in ['electric', 'gas', 'both']:
+            return jsonify({'error': 'data_scope must be "electric", "gas", or "both"'}), 400
+
+        # Check for existing active connection
+        existing = UtilityConnection.query.filter_by(
+            audit_id=audit.id
+        ).filter(UtilityConnection.status.in_([
+            'connected', 'pending_authorization', 'sync_in_progress'
+        ])).first()
+
+        if existing:
+            return jsonify({
+                'error': 'Active utility connection already exists for this audit',
+                'existing_connection_id': existing.id,
+                'existing_status': existing.status
+            }), 409
+
+        # Use the provider registry to initiate connection
+        registry = get_registry()
+        result = registry.connect(audit.id, audit.user_id, utility_name, data_scope)
+
+        if not result.success:
+            return jsonify({
+                'error': result.error or 'Connection failed',
+                'connection_id': result.connection_id
+            }), 400
+
+        # Tag the connection with portal source so the callback redirects correctly
+        if result.connection_id:
+            conn = UtilityConnection.query.get(result.connection_id)
+            if conn:
+                metadata = conn.provider_metadata or {}
+                metadata['source'] = 'portal'
+                conn.provider_metadata = metadata
+                db.session.commit()
+
+        logging.info(
+            f"Homeowner utility connect: property_id={property.id}, "
+            f"audit_id={audit.id}, connection_id={result.connection_id}"
+        )
+
+        response = {
+            'auth_url': result.auth_url,
+            'state': result.state,
+            'connection_id': result.connection_id,
+            'requires_redirect': result.auth_url is not None
+        }
+
+        if hasattr(result, 'provider_name') and result.provider_name:
+            response['provider_used'] = result.provider_name
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Homeowner utility connect error: {e}")
+        return jsonify({'error': 'Failed to initiate utility connection'}), 500
