@@ -95,14 +95,17 @@ def require_homeowner_auth(f):
 @bp.route('/homeowner/auth', methods=['POST'])
 def homeowner_auth():
     """
-    Authenticate homeowner with Google Place ID and phone number.
+    Authenticate homeowner with address and phone number.
     
     NOTE: Rate limiting (10 req/min per IP) should be configured at the
     infrastructure level (Railway/nginx) rather than in application code.
     
     Request body:
     {
-        "google_place_id": "ChIJ...",  # Google Places API place_id
+        "street": "123 Main St",
+        "city": "San Diego",
+        "state": "CA",
+        "zip_code": "92101",
         "phone_number": "555-123-4567"  # Any reasonable phone format
     }
     
@@ -117,11 +120,14 @@ def homeowner_auth():
         if not data:
             return jsonify({'error': 'Request body required'}), 400
         
-        google_place_id = data.get('google_place_id', '').strip()
+        street = data.get('street', '').strip()
+        city = data.get('city', '').strip()
+        state = data.get('state', '').strip()
+        zip_code = data.get('zip_code', '').strip()
         phone_number = data.get('phone_number', '').strip()
         
-        if not google_place_id:
-            return jsonify({'error': 'google_place_id is required'}), 400
+        if not street or not city or not state or not zip_code:
+            return jsonify({'error': 'Address fields (street, city, state, zip_code) are required'}), 400
         
         if not phone_number:
             return jsonify({'error': 'phone_number is required'}), 400
@@ -131,11 +137,16 @@ def homeowner_auth():
         if not normalized_phone:
             return jsonify({'error': 'Invalid phone number format'}), 400
         
-        # Look up property by google_place_id
-        property = Property.query.filter_by(google_place_id=google_place_id).first()
+        # Look up property by normalized address (case-insensitive)
+        property = Property.query.filter(
+            db.func.lower(Property.street) == street.lower(),
+            db.func.lower(Property.city) == city.lower(),
+            db.func.upper(Property.state) == state.upper(),
+            Property.zip_code == zip_code
+        ).first()
         
         if not property:
-            logging.info(f"Homeowner auth failed: no property found for place_id={google_place_id}")
+            logging.info(f"Homeowner auth failed: no property found for address={street}, {city}, {state} {zip_code}")
             return jsonify({'error': 'No property found for this address'}), 401
         
         # Check phone number match
