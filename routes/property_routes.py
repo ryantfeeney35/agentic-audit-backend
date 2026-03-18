@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, g
 from sqlalchemy import text
 from models import Property, db
 from auth import require_auth
+from utils.homeowner_utils import normalize_phone
 import os
 from supabase import create_client, Client
 
@@ -43,6 +44,10 @@ def handle_properties():
 
     elif request.method == 'POST':
         data = request.get_json()
+        # Normalize phone number to E.164 format for homeowner auth compatibility
+        raw_phone = data.get('phone_number')
+        normalized_phone = normalize_phone(raw_phone) if raw_phone else None
+        
         new_property = Property(
             user_id=g.current_user['id'],  # Automatically set user_id
             street=data.get('street'),
@@ -52,7 +57,7 @@ def handle_properties():
             year_built=data.get('year_built'),
             sqft=data.get('sqft'),
             property_type=data.get('property_type'),
-            phone_number=data.get('phone_number'),
+            phone_number=normalized_phone,
             google_place_id=data.get('google_place_id')
         )
         db.session.add(new_property)
@@ -110,6 +115,10 @@ def update_property(id):
         return jsonify({'error': 'Property not found or access denied'}), 403
         
     data = request.get_json()
+    # Normalize phone number to E.164 format for homeowner auth compatibility
+    if 'phone_number' in data and data['phone_number']:
+        data['phone_number'] = normalize_phone(data['phone_number'])
+    
     stmt = text("""
         UPDATE properties
         SET street=:street,
