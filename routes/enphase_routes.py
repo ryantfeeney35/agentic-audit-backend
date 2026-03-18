@@ -143,6 +143,17 @@ def oauth_callback():
     - error: Error code if authorization failed
     - error_description: Human-readable error message
     """
+    def _redirect_url(connection, **params):
+        """Build redirect URL based on connection source (mobile app vs portal)."""
+        is_portal = (
+            connection is not None
+            and isinstance(connection.provider_metadata, dict)
+            and connection.provider_metadata.get('source') == 'portal'
+        )
+        base = "/homeowner/solar/connect" if is_portal else "/enphase/callback"
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        return f"{base}?{qs}" if qs else base
+
     try:
         # Check for OAuth error
         error = request.args.get('error')
@@ -152,6 +163,7 @@ def oauth_callback():
             
             logger.warning(f"ENPHASE_OAUTH_ERROR | error={error} description={error_description}")
             
+            connection = None
             # Update connection status if we can find it
             if state:
                 connection = EnphaseConnection.query.filter_by(oauth_state=state).first()
@@ -160,8 +172,8 @@ def oauth_callback():
                     connection.last_sync_error = f"{error}: {error_description}"
                     db.session.commit()
             
-            # Redirect to app with error
-            return redirect(f"/enphase/callback?error={error}&description={error_description}")
+            # Redirect with error
+            return redirect(_redirect_url(connection, error=error, description=error_description))
         
         # Get authorization code and state
         code = request.args.get('code')
@@ -179,7 +191,7 @@ def oauth_callback():
         
         if connection.status != 'pending_authorization':
             logger.warning(f"ENPHASE_OAUTH_CALLBACK_DUPLICATE | connection={connection.id}")
-            return redirect(f"/enphase/callback?success=true&connection_id={connection.id}")
+            return redirect(_redirect_url(connection, success="true", connection_id=connection.id))
         
         # Exchange code for tokens
         client = get_enphase_client()
@@ -190,13 +202,17 @@ def oauth_callback():
             connection.status = 'failed'
             connection.last_sync_error = str(e)
             db.session.commit()
-            return redirect(f"/enphase/callback?error=token_exchange_failed&description={e}")
+            return redirect(_redirect_url(connection, error="token_exchange_failed", description=str(e)))
         
         # Store encrypted tokens
         connection.access_token = tokens.access_token
         connection.refresh_token = tokens.refresh_token
         connection.token_expires_at = tokens.expires_at
         connection.oauth_state = None  # Clear state after use
+        
+        # Preserve source in metadata when updating with system info
+        existing_metadata = connection.provider_metadata or {}
+        source = existing_metadata.get('source')
         
         # Discover systems
         try:
@@ -207,7 +223,7 @@ def oauth_callback():
                 connection.status = 'failed'
                 connection.last_sync_error = "No Enphase systems found"
                 db.session.commit()
-                return redirect("/enphase/callback?error=no_systems&description=No+Enphase+systems+found")
+                return redirect(_redirect_url(connection, error="no_systems", description="No+Enphase+systems+found"))
             
             # Use first system as primary, store all in metadata
             primary_system = systems[0]
@@ -222,7 +238,8 @@ def oauth_callback():
                         'timezone': s.timezone
                     } for s in systems
                 ],
-                'primary_system': primary_system.system_id
+                'primary_system': primary_system.system_id,
+                **(({'source': source} if source else {}))
             }
             connection.status = 'connected'
             
@@ -239,8 +256,8 @@ def oauth_callback():
         
         db.session.commit()
         
-        # Redirect to app with success
-        return redirect(f"/enphase/callback?success=true&connection_id={connection.id}")
+        # Redirect based on source
+        return redirect(_redirect_url(connection, success="true", connection_id=connection.id))
         
     except Exception as e:
         logger.error(f"ENPHASE_OAUTH_CALLBACK_ERROR | error={e}")
@@ -471,6 +488,7 @@ def get_telemetry(audit_id: int):
     - start_date: ISO date string (default: 12 months ago)
     - end_date: ISO date string (default: now)
     - aggregate: 'daily' | 'monthly' | None (default: None = raw intervals)
+    - source: 'api' | 'spreadsheet' | None (default: None = all sources)
     - limit: Max records (default: 1000)
     - offset: Pagination offset (default: 0)
     
@@ -506,8 +524,13 @@ def get_telemetry(audit_id: int):
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         aggregate = request.args.get('aggregate')
+        source_filter = request.args.get('source')  # 'api', 'spreadsheet', or None for all
         limit = min(int(request.args.get('limit', 1000)), 10000)
         offset = int(request.args.get('offset', 0))
+        
+        # Validate source filter
+        if source_filter and source_filter not in ('api', 'spreadsheet'):
+            return jsonify({'error': f"Invalid source filter: {source_filter}. Must be 'api' or 'spreadsheet'"}), 400
         
         # Build query
         query = EnphaseTelemetryInterval.query.filter_by(connection_id=connection.id)
@@ -516,20 +539,22 @@ def get_telemetry(audit_id: int):
             query = query.filter(EnphaseTelemetryInterval.interval_start >= datetime.fromisoformat(start_date))
         if end_date:
             query = query.filter(EnphaseTelemetryInterval.interval_end <= datetime.fromisoformat(end_date))
+        if source_filter:
+            query = query.filter(EnphaseTelemetryInterval.source == source_filter)
         
         total = query.count()
         
         # Handle aggregation
         if aggregate == 'daily':
-            intervals = _aggregate_daily(query)
+            intervals = _aggregate_daily(query, source_filter=source_filter)
         elif aggregate == 'monthly':
-            intervals = _aggregate_monthly(query)
+            intervals = _aggregate_monthly(query, source_filter=source_filter)
         else:
             intervals = query.order_by(EnphaseTelemetryInterval.interval_start).offset(offset).limit(limit).all()
             intervals = [_serialize_interval(i) for i in intervals]
         
         # Calculate summary
-        summary = _calculate_telemetry_summary(connection.id)
+        summary = _calculate_telemetry_summary(connection.id, source_filter=source_filter)
         
         return jsonify({
             'intervals': intervals,
@@ -563,12 +588,27 @@ def _serialize_interval(interval: EnphaseTelemetryInterval) -> dict:
         'grid_export_kwh': interval.grid_export_kwh,
         'battery_charge_kwh': interval.battery_charge_kwh,
         'battery_discharge_kwh': interval.battery_discharge_kwh,
+        'source': interval.source,
     }
 
 
-def _calculate_telemetry_summary(connection_id: int) -> dict:
-    """Calculate summary statistics from telemetry data."""
+def _calculate_telemetry_summary(connection_id: int, source_filter: str = None) -> dict:
+    """
+    Calculate summary statistics from telemetry data.
+    
+    Args:
+        connection_id: ID of Enphase connection
+        source_filter: Optional filter for 'api' or 'spreadsheet' source
+        
+    Returns:
+        Summary dict with totals, averages, and source breakdown
+    """
     from sqlalchemy import func
+    
+    # Build base query
+    base_query = EnphaseTelemetryInterval.query.filter_by(connection_id=connection_id)
+    if source_filter:
+        base_query = base_query.filter(EnphaseTelemetryInterval.source == source_filter)
     
     # Get aggregated stats
     stats = db.session.query(
@@ -581,10 +621,44 @@ def _calculate_telemetry_summary(connection_id: int) -> dict:
         func.min(EnphaseTelemetryInterval.interval_start).label('data_start'),
         func.max(EnphaseTelemetryInterval.interval_end).label('data_end'),
         func.count(EnphaseTelemetryInterval.id).label('interval_count')
-    ).filter_by(connection_id=connection_id).first()
+    ).filter(EnphaseTelemetryInterval.connection_id == connection_id)
+    
+    if source_filter:
+        stats = stats.filter(EnphaseTelemetryInterval.source == source_filter)
+    
+    stats = stats.first()
     
     if not stats or not stats.interval_count:
         return None
+    
+    # Calculate source breakdown (only when not filtering by source)
+    source_breakdown = None
+    if not source_filter:
+        source_counts = db.session.query(
+            EnphaseTelemetryInterval.source,
+            func.count(EnphaseTelemetryInterval.id).label('count')
+        ).filter_by(connection_id=connection_id).group_by(
+            EnphaseTelemetryInterval.source
+        ).all()
+        
+        api_count = 0
+        spreadsheet_count = 0
+        for row in source_counts:
+            if row.source == 'api':
+                api_count = row.count
+            elif row.source == 'spreadsheet':
+                spreadsheet_count = row.count
+        
+        # Determine primary source
+        primary_source = 'api' if api_count >= spreadsheet_count else 'spreadsheet'
+        if api_count == 0 and spreadsheet_count == 0:
+            primary_source = None
+        
+        source_breakdown = {
+            'api_count': api_count,
+            'spreadsheet_count': spreadsheet_count,
+            'primary_source': primary_source
+        }
     
     # Calculate days of data
     if stats.data_start and stats.data_end:
@@ -609,15 +683,19 @@ def _calculate_telemetry_summary(connection_id: int) -> dict:
         'data_start': stats.data_start.isoformat() if stats.data_start else None,
         'data_end': stats.data_end.isoformat() if stats.data_end else None,
         'days_covered': days_covered,
-        'interval_count': stats.interval_count
+        'interval_count': stats.interval_count,
+        'source_breakdown': source_breakdown,
     }
 
 
-def _aggregate_daily(query) -> list:
+def _aggregate_daily(query, source_filter: str = None) -> list:
     """Aggregate intervals to daily totals."""
     from sqlalchemy import func, cast, Date
     
-    results = db.session.query(
+    # Extract connection_id from query
+    connection_id = query.whereclause.right.value
+    
+    base_query = db.session.query(
         cast(EnphaseTelemetryInterval.interval_start, Date).label('date'),
         func.sum(EnphaseTelemetryInterval.production_kwh).label('production_kwh'),
         func.sum(EnphaseTelemetryInterval.consumption_kwh).label('consumption_kwh'),
@@ -625,9 +703,12 @@ def _aggregate_daily(query) -> list:
         func.sum(EnphaseTelemetryInterval.grid_export_kwh).label('grid_export_kwh'),
         func.sum(EnphaseTelemetryInterval.battery_charge_kwh).label('battery_charge_kwh'),
         func.sum(EnphaseTelemetryInterval.battery_discharge_kwh).label('battery_discharge_kwh'),
-    ).filter(
-        EnphaseTelemetryInterval.connection_id == query.whereclause.right.value
-    ).group_by(
+    ).filter(EnphaseTelemetryInterval.connection_id == connection_id)
+    
+    if source_filter:
+        base_query = base_query.filter(EnphaseTelemetryInterval.source == source_filter)
+    
+    results = base_query.group_by(
         cast(EnphaseTelemetryInterval.interval_start, Date)
     ).order_by('date').all()
     
@@ -645,11 +726,14 @@ def _aggregate_daily(query) -> list:
     ]
 
 
-def _aggregate_monthly(query) -> list:
+def _aggregate_monthly(query, source_filter: str = None) -> list:
     """Aggregate intervals to monthly totals."""
     from sqlalchemy import func, extract
     
-    results = db.session.query(
+    # Extract connection_id from query
+    connection_id = query.whereclause.right.value
+    
+    base_query = db.session.query(
         extract('year', EnphaseTelemetryInterval.interval_start).label('year'),
         extract('month', EnphaseTelemetryInterval.interval_start).label('month'),
         func.sum(EnphaseTelemetryInterval.production_kwh).label('production_kwh'),
@@ -658,9 +742,12 @@ def _aggregate_monthly(query) -> list:
         func.sum(EnphaseTelemetryInterval.grid_export_kwh).label('grid_export_kwh'),
         func.sum(EnphaseTelemetryInterval.battery_charge_kwh).label('battery_charge_kwh'),
         func.sum(EnphaseTelemetryInterval.battery_discharge_kwh).label('battery_discharge_kwh'),
-    ).filter(
-        EnphaseTelemetryInterval.connection_id == query.whereclause.right.value
-    ).group_by('year', 'month').order_by('year', 'month').all()
+    ).filter(EnphaseTelemetryInterval.connection_id == connection_id)
+    
+    if source_filter:
+        base_query = base_query.filter(EnphaseTelemetryInterval.source == source_filter)
+    
+    results = base_query.group_by('year', 'month').order_by('year', 'month').all()
     
     return [
         {

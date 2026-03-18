@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, g
 from sqlalchemy import text
 from models import Property, db
 from auth import require_auth
+from utils.homeowner_utils import normalize_phone
 import os
 from supabase import create_client, Client
 
@@ -21,7 +22,7 @@ def handle_properties():
         # Filter properties by current user
         with db.engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT id, street, city, state, zip_code, year_built, sqft, property_type 
+                SELECT id, street, city, state, zip_code, year_built, sqft, property_type, phone_number, google_place_id 
                 FROM properties WHERE user_id = :user_id
             """), {"user_id": g.current_user['id']})
             properties = [
@@ -34,6 +35,8 @@ def handle_properties():
                     "year_built": row.year_built,
                     "sqft": row.sqft,
                     "property_type": row.property_type,
+                    "phone_number": row.phone_number,
+                    "google_place_id": row.google_place_id,
                 }
                 for row in result
             ]
@@ -41,6 +44,10 @@ def handle_properties():
 
     elif request.method == 'POST':
         data = request.get_json()
+        # Normalize phone number to E.164 format for homeowner auth compatibility
+        raw_phone = data.get('phone_number')
+        normalized_phone = normalize_phone(raw_phone) if raw_phone else None
+        
         new_property = Property(
             user_id=g.current_user['id'],  # Automatically set user_id
             street=data.get('street'),
@@ -49,7 +56,9 @@ def handle_properties():
             zip_code=data.get('zip_code'),
             year_built=data.get('year_built'),
             sqft=data.get('sqft'),
-            property_type=data.get('property_type')
+            property_type=data.get('property_type'),
+            phone_number=normalized_phone,
+            google_place_id=data.get('google_place_id')
         )
         db.session.add(new_property)
         db.session.commit()
@@ -62,6 +71,8 @@ def handle_properties():
             "year_built": new_property.year_built,
             "sqft": new_property.sqft,
             "property_type": new_property.property_type,
+            "phone_number": new_property.phone_number,
+            "google_place_id": new_property.google_place_id,
         }), 201
 
 @bp.route('/properties/<int:property_id>', methods=['GET'])
@@ -74,7 +85,7 @@ def get_property(property_id):
     
     with db.engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT id, street, city, state, zip_code, year_built, sqft, property_type
+            SELECT id, street, city, state, zip_code, year_built, sqft, property_type, phone_number, google_place_id
             FROM properties
             WHERE id = :id AND user_id = :user_id
         """), {"id": property_id, "user_id": g.current_user['id']}).fetchone()
@@ -89,6 +100,8 @@ def get_property(property_id):
                 "year_built": result.year_built,
                 "sqft": result.sqft,
                 "property_type": result.property_type,
+                "phone_number": result.phone_number,
+                "google_place_id": result.google_place_id,
             })
         else:
             return jsonify({"error": "Property not found"}), 404
@@ -102,6 +115,10 @@ def update_property(id):
         return jsonify({'error': 'Property not found or access denied'}), 403
         
     data = request.get_json()
+    # Normalize phone number to E.164 format for homeowner auth compatibility
+    if 'phone_number' in data and data['phone_number']:
+        data['phone_number'] = normalize_phone(data['phone_number'])
+    
     stmt = text("""
         UPDATE properties
         SET street=:street,
@@ -110,7 +127,9 @@ def update_property(id):
             zip_code=:zip_code,
             year_built=:year_built,
             sqft=:sqft,
-            property_type=:property_type
+            property_type=:property_type,
+            phone_number=:phone_number,
+            google_place_id=:google_place_id
         WHERE id=:id AND user_id=:user_id
     """)
     with db.engine.begin() as conn:

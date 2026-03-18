@@ -320,6 +320,17 @@ def oauth_callback():
     
     Redirects to frontend with status.
     """
+    def _redirect_url(conn, **params):
+        """Build redirect URL based on connection source (mobile app vs portal)."""
+        is_portal = (
+            conn is not None
+            and isinstance(conn.provider_metadata, dict)
+            and conn.provider_metadata.get('source') == 'portal'
+        )
+        base = "/homeowner/utility-data" if is_portal else "/utility/callback"
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        return f"{base}?{qs}" if qs else base
+
     try:
         code = request.args.get('code')
         state = request.args.get('state')
@@ -333,11 +344,26 @@ def oauth_callback():
                 error, error_description,
                 extra={"event_type": "oauth_error", "error": error, "description": error_description}
             )
-            # Redirect to frontend with error
-            return redirect(f"/utility/callback?error={error}&description={error_description}")
+            # Try to find the connection from state to determine redirect target
+            conn = None
+            if state:
+                try:
+                    _, conn_id_str = state.rsplit(":", 1)
+                    conn = UtilityConnection.query.get(int(conn_id_str))
+                except (ValueError, AttributeError):
+                    pass
+            return redirect(_redirect_url(conn, error=error, description=error_description))
         
         if not code or not state:
             return jsonify({'error': 'Missing code or state parameter'}), 400
+        
+        # Look up connection from state to determine redirect target
+        conn = None
+        try:
+            _, conn_id_str = state.rsplit(":", 1)
+            conn = UtilityConnection.query.get(int(conn_id_str))
+        except (ValueError, AttributeError):
+            pass
         
         # Delegate to registry which routes to appropriate provider
         start_time = time.time()
@@ -356,7 +382,7 @@ def oauth_callback():
                     "duration_ms": duration_ms
                 }
             )
-            return redirect(f"/utility/callback?error=callback_failed&description={result.error}")
+            return redirect(_redirect_url(conn, error="callback_failed", description=str(result.error)))
         
         # Log successful callback
         logger.info(
@@ -376,8 +402,8 @@ def oauth_callback():
                 # Optionally trigger sync here or let frontend trigger it
                 log_data_sync_event(conn.id, conn.provider_name, "oauth_complete", True)
         
-        # Redirect to frontend success page
-        return redirect(f"/utility/callback?success=true&connection_id={result.connection_id}")
+        # Redirect based on source
+        return redirect(_redirect_url(conn, success="true", connection_id=result.connection_id))
         
     except Exception as e:
         logger.error(f"Error handling OAuth callback: {e}")
