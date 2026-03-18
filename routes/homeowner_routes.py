@@ -165,7 +165,7 @@ def homeowner_auth():
             'expires_in': HOMEOWNER_JWT_EXPIRY_HOURS * 3600,
             'property': {
                 'id': property.id,
-                'address': property.address,
+                'address': property.street,
                 'city': property.city,
                 'state': property.state,
                 'zip_code': property.zip_code
@@ -194,7 +194,7 @@ def homeowner_session():
         return jsonify({
             'property': {
                 'id': property.id,
-                'address': property.address,
+                'address': property.street,
                 'city': property.city,
                 'state': property.state,
                 'zip_code': property.zip_code,
