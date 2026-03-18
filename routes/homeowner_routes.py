@@ -576,8 +576,18 @@ def homeowner_enphase_connect():
         409: Active connection already exists
         500: Server error
     """
+    import os
     import secrets
     from utils.enphase import EnphaseClient
+
+    # Fast-fail if Enphase credentials are not configured
+    if not all([
+        os.environ.get('ENPHASE_CLIENT_ID'),
+        os.environ.get('ENPHASE_CLIENT_SECRET'),
+        os.environ.get('ENPHASE_API_KEY'),
+    ]):
+        logging.warning("Homeowner Enphase connect: missing ENPHASE env vars")
+        return jsonify({'error': 'Enphase integration is not configured on this server'}), 503
 
     try:
         property = Property.query.get(g.homeowner_property_id)
@@ -654,8 +664,8 @@ def homeowner_enphase_connect():
 
     except Exception as e:
         db.session.rollback()
-        logging.error(f"Homeowner Enphase connect error: {e}")
-        return jsonify({'error': 'Failed to initiate Enphase connection'}), 500
+        logging.error(f"Homeowner Enphase connect error: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to initiate Enphase connection: {e}'}), 500
 
 
 @bp.route('/homeowner/utility/connect', methods=['POST'])
@@ -759,5 +769,5 @@ def homeowner_utility_connect():
 
     except Exception as e:
         db.session.rollback()
-        logging.error(f"Homeowner utility connect error: {e}")
-        return jsonify({'error': 'Failed to initiate utility connection'}), 500
+        logging.error(f"Homeowner utility connect error: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to initiate utility connection: {e}'}), 500
