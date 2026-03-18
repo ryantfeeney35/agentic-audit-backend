@@ -415,16 +415,10 @@ def upload_enphase_csv():
         if not property:
             return jsonify({'error': 'Property not found'}), 404
         
-        # Get the audit associated with this property
-        audit = Audit.query.filter_by(
-            property_id=property.id,
-            status='in_progress'
+        # Get the most recent audit associated with this property
+        audit = Audit.query.filter_by(property_id=property.id).order_by(
+            Audit.created_at.desc()
         ).first()
-        
-        if not audit:
-            audit = Audit.query.filter_by(property_id=property.id).order_by(
-                Audit.created_at.desc()
-            ).first()
         
         if not audit:
             return jsonify({'error': 'No audit found for this property'}), 404
