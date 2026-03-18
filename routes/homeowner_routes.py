@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import datetime
 from flask import Blueprint, request, jsonify, g
-from models import Property, Audit, AuditStep, AuditMedia, db
+from models import Property, Audit, AuditStep, AuditMedia, UtilityConnection, EnphaseConnection, db
 from supabase import create_client
 import logging
 from functools import wraps
@@ -191,6 +191,44 @@ def homeowner_session():
         if not property:
             return jsonify({'error': 'Property not found'}), 404
         
+        # Build task completion status from actual DB records
+        task_status = {
+            'utility_bill': 'not-started',
+            'utility_data': 'not-started',
+            'solar_data': 'not-started',
+        }
+        
+        audit = Audit.query.filter_by(property_id=property.id).order_by(Audit.created_at.desc()).first()
+        if audit:
+            # Check utility bill: look for completed step or media record
+            bill_step = AuditStep.query.filter_by(
+                audit_id=audit.id, step_type='utility_bill'
+            ).first()
+            if bill_step and bill_step.status == 'Completed':
+                task_status['utility_bill'] = 'completed'
+            else:
+                # Also check media directly (mobile app uses step_type='interview' + label='Utility Bill')
+                bill_media = AuditMedia.query.filter(
+                    AuditMedia.audit_id == audit.id,
+                    AuditMedia.media_type.in_(['utility_bill', 'document'])
+                ).first()
+                if bill_media:
+                    task_status['utility_bill'] = 'completed'
+            
+            # Check utility data connection
+            utility_conn = UtilityConnection.query.filter_by(
+                audit_id=audit.id, status='connected'
+            ).first()
+            if utility_conn:
+                task_status['utility_data'] = 'completed'
+            
+            # Check solar/Enphase data connection
+            enphase_conn = EnphaseConnection.query.filter_by(
+                audit_id=audit.id
+            ).filter(EnphaseConnection.status.in_(['connected', 'sync_in_progress'])).first()
+            if enphase_conn:
+                task_status['solar_data'] = 'completed'
+        
         return jsonify({
             'property': {
                 'id': property.id,
@@ -200,7 +238,8 @@ def homeowner_session():
                 'zip_code': property.zip_code,
                 # Include audit status if available
                 'has_audit': hasattr(property, 'audits') and len(property.audits) > 0
-            }
+            },
+            'task_status': task_status
         }), 200
         
     except Exception as e:
