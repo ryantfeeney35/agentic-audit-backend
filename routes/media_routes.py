@@ -379,6 +379,7 @@ def upload_media_by_step_label(audit_id, step_label):
     if not step:
         step = AuditStep(
             audit_id=audit_id,
+            user_id=g.current_user['id'],
             label=step_label,
             step_type=step_type,
             status="Processing"
