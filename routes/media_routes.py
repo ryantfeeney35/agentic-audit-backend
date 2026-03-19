@@ -416,6 +416,7 @@ def upload_media_by_step_label(audit_id, step_label):
         # Save AuditMedia row
         media_row = AuditMedia(
             audit_id=audit_id,
+            user_id=g.current_user['id'],
             step_id=step.id,
             media_url=public_url,
             file_name=file.filename,
