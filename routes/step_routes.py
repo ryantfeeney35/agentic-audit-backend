@@ -131,6 +131,23 @@ def create_or_update_audit_step(audit_id):
 
     # --- CREATE new step ---
     step = AuditStep.query.filter_by(audit_id=audit_id, step_type=step_type, label=label).first()
+
+    # Safety-net: when the offline queue drains, an upload may auto-create a
+    # stub step with the *original* placeholder label (e.g. "New Room") while
+    # the subsequent save POST arrives with the user-chosen label (e.g.
+    # "Kitchen").  Detect that stub — same audit/type/user, empty metadata,
+    # already has media — and merge into it rather than creating a duplicate.
+    if not step:
+        stub = (
+            AuditStep.query
+            .filter_by(audit_id=audit_id, step_type=step_type, user_id=g.current_user['id'])
+            .filter(db.or_(AuditStep.meta.is_(None), AuditStep.meta == {}))
+            .filter(AuditStep.media.any())
+            .first()
+        )
+        if stub:
+            step = stub
+            step.label = label  # adopt the real label
     notes_data = step.meta.copy() if step and isinstance(step.meta, dict) else {}
 
     if "meta" in data and isinstance(data["meta"], dict):
