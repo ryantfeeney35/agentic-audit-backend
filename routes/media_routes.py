@@ -382,7 +382,8 @@ def upload_media_by_step_label(audit_id, step_label):
             user_id=g.current_user['id'],
             label=step_label,
             step_type=step_type,
-            status="Processing"
+            status="Processing",
+            meta={"_auto_stub": True},  # Tag so create_or_update can identify media-created stubs
         )
         db.session.add(step)
         db.session.commit()
