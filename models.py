@@ -41,6 +41,7 @@ class Property(db.Model):
     # Homeowner portal fields
     phone_number = db.Column(db.String(20), nullable=True)
     google_place_id = db.Column(db.String(255), nullable=True, index=True)
+    signup_source = db.Column(db.String(50), nullable=True)  # e.g. 'self_service'
 
     # Relationships
     user = relationship("User", back_populates="properties")

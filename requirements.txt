@@ -17,5 +17,6 @@ pydantic>=2.0.0
 pytest>=7.0.0
 rapidfuzz>=3.0.0
 sentry-sdk[flask]>=2.0.0
+resend>=2.0.0
 numpy>=1.24.0
 numpy-financial>=1.0.0
