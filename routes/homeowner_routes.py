@@ -355,6 +355,10 @@ def homeowner_session():
             ).filter(EnphaseConnection.status.in_(['connected', 'sync_in_progress'])).first()
             if enphase_conn:
                 task_status['solar_data'] = 'completed'
+
+        # Solar opt-out overrides regardless of audit existence
+        if property.solar_opted_out:
+            task_status['solar_data'] = 'completed'
         
         return jsonify({
             'property': {
@@ -373,6 +377,27 @@ def homeowner_session():
     except Exception as e:
         logging.error(f"Homeowner session error: {e}")
         return jsonify({'error': 'Failed to get session'}), 500
+
+
+@bp.route('/homeowner/solar/skip', methods=['POST'])
+@require_homeowner_auth
+def skip_solar():
+    """
+    Mark that the homeowner does not have solar panels.
+    Sets solar_opted_out=True so solar data is no longer required.
+    """
+    try:
+        property = Property.query.get(g.homeowner_property_id)
+        if not property:
+            return jsonify({'error': 'Property not found'}), 404
+
+        property.solar_opted_out = True
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Skip solar error: {e}")
+        return jsonify({'error': 'Failed to update solar preference'}), 500
 
 
 @bp.route('/homeowner/utility-bill', methods=['POST'])
