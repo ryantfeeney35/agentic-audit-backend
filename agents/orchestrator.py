@@ -5,6 +5,7 @@ from .context_builder import build_audit_context, build_audio_context, get_audit
 from .schemas import StepType
 from .services.filter import filter_and_enrich_recommendations
 from models import AgentConversation, AuditRecommendation, db, AuditMedia, AuditStep, Audit, UtilityConnection, UtilityIntervalData
+from sqlalchemy.orm.exc import ObjectDeletedError
 from memory.config import memory_enabled
 from memory import chat_memory as chatmem
 from sqlalchemy import func
@@ -751,6 +752,12 @@ class OrchestratorAgent:
 
         for r in saved:
             try:
+                # Guard against concurrent request deleting recs
+                try:
+                    db.session.refresh(r)
+                except (ObjectDeletedError, Exception):
+                    logger.warning("Recommendation %s no longer exists, skipping media association.", getattr(r, 'id', None))
+                    continue
                 rec_text = (r.summary_override or r.summary or "").strip()
                 rec_vector = None
 
