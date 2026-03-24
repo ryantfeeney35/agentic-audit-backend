@@ -117,6 +117,9 @@ def homeowner_signup():
     - 400 if missing/invalid parameters
     - 500 if SELF_SERVICE_USER_ID not configured
     """
+    if request.method == 'OPTIONS':
+        return '', 204
+
     try:
         self_service_user_id = os.environ.get('SELF_SERVICE_USER_ID')
         if not self_service_user_id:
