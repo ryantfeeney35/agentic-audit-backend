@@ -1,19 +1,19 @@
 # backend/utils/email_utils.py
-"""Email notification utilities for homeowner signup (via Resend)."""
+"""Email notification utilities for homeowner signup (via SMTP)."""
 import os
 import logging
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime, timezone
-
-import resend
 
 
 def send_signup_notification(street: str, city: str, state: str, zip_code: str, phone: str):
     """
     Send a notification email when a new homeowner signs up via self-service.
 
-    Reads RESEND_API_KEY, SIGNUP_NOTIFICATION_EMAIL, and optionally FROM_EMAIL
-    from environment. Skips silently if SIGNUP_NOTIFICATION_EMAIL or
-    RESEND_API_KEY is not set.
+    Reads SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SIGNUP_NOTIFICATION_EMAIL,
+    and optionally FROM_EMAIL from environment.
+    Skips silently if required vars are not set.
 
     Raises on send failure so the caller can log and continue.
     """
@@ -22,14 +22,16 @@ def send_signup_notification(street: str, city: str, state: str, zip_code: str, 
         logging.warning("SIGNUP_NOTIFICATION_EMAIL not set — skipping signup notification")
         return
 
-    api_key = os.environ.get('RESEND_API_KEY', '').strip()
-    if not api_key:
-        logging.warning("RESEND_API_KEY not set — skipping signup notification")
+    smtp_host = os.environ.get('SMTP_HOST', '').strip()
+    smtp_user = os.environ.get('SMTP_USER', '').strip()
+    smtp_password = os.environ.get('SMTP_PASSWORD', '').strip()
+    if not smtp_host or not smtp_user or not smtp_password:
+        logging.warning("SMTP credentials not fully set — skipping signup notification")
         return
 
-    resend.api_key = api_key
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    from_email = os.environ.get('FROM_EMAIL', smtp_user)
 
-    from_email = os.environ.get('FROM_EMAIL', 'Sustainrgy <notifications@sustainrgy.com>')
     address = f"{street}, {city}, {state} {zip_code}"
     timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
@@ -40,11 +42,14 @@ def send_signup_notification(street: str, city: str, state: str, zip_code: str, 
         f"Time:    {timestamp}\n"
     )
 
-    resend.Emails.send({
-        "from": from_email,
-        "to": [recipient],
-        "subject": f"New Homeowner Signup — {address}",
-        "text": body,
-    })
+    msg = MIMEText(body)
+    msg['Subject'] = f"New Homeowner Signup — {address}"
+    msg['From'] = from_email
+    msg['To'] = recipient
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.send_message(msg)
 
     logging.info(f"Signup notification sent to {recipient} for {address}")

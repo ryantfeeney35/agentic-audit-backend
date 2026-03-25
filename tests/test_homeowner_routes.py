@@ -350,7 +350,9 @@ class TestSignupNotificationEmail:
     def test_email_skipped_when_env_missing(self, monkeypatch):
         """send_signup_notification should return early if env var unset."""
         monkeypatch.delenv('SIGNUP_NOTIFICATION_EMAIL', raising=False)
-        monkeypatch.delenv('RESEND_API_KEY', raising=False)
+        monkeypatch.delenv('SMTP_HOST', raising=False)
+        monkeypatch.delenv('SMTP_USER', raising=False)
+        monkeypatch.delenv('SMTP_PASSWORD', raising=False)
         from utils.email_utils import send_signup_notification
         # Should not raise
         send_signup_notification(
