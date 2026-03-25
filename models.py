@@ -41,6 +41,8 @@ class Property(db.Model):
     # Homeowner portal fields
     phone_number = db.Column(db.String(20), nullable=True)
     google_place_id = db.Column(db.String(255), nullable=True, index=True)
+    signup_source = db.Column(db.String(50), nullable=True)  # e.g. 'self_service'
+    solar_opted_out = db.Column(db.Boolean, nullable=False, default=False)
 
     # Relationships
     user = relationship("User", back_populates="properties")
@@ -643,3 +645,28 @@ class EnphaseTelemetryInterval(db.Model):
         db.Index('ix_enphase_telemetry_connection_time', 'connection_id', 'interval_start'),
         db.UniqueConstraint('connection_id', 'interval_start', name='uq_enphase_telemetry_connection_interval'),
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Idempotency Key (offline-mode queue drain support)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class IdempotencyKey(db.Model):
+    """
+    Stores idempotency keys sent by the mobile client during offline queue
+    drain.  When the client replays a queued mutation it attaches an
+    ``X-Idempotency-Key`` header.  The server checks this table:
+      • If the key exists → return the cached response (no duplicate side-effects).
+      • If the key is new  → process the request normally, store the key + response hash.
+
+    Keys expire after 24 hours and are cleaned up lazily or via a scheduled sweep.
+    """
+    __tablename__ = "idempotency_keys"
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    endpoint = db.Column(db.String(512), nullable=False)
+    method = db.Column(db.String(10), nullable=False, default="POST")
+    status_code = db.Column(db.Integer, nullable=False)
+    response_body = db.Column(db.Text, nullable=False)  # JSON-serialised response
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

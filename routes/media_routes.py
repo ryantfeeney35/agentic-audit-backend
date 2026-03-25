@@ -14,6 +14,7 @@ import requests
 
 from models import AuditMedia, AuditStep, Audit, db
 from auth import require_auth
+from utils.idempotency import idempotent
 from agents.base_agent import run_agent
 from agents.schemas import ExteriorSidingSchema, HVACSchema, InsulationSchema, InterviewSchema, InteriorRoomSchema, RoofMediaSchema
 
@@ -356,6 +357,7 @@ def process_media_async(app, media_id: int, local_path: str, public_url: str, me
 # -------------------------
 @bp.route('/audits/<int:audit_id>/steps/<string:step_label>/upload', methods=['POST'])
 @require_auth
+@idempotent
 def upload_media_by_step_label(audit_id, step_label):
     # Check audit ownership
     audit = Audit.query.filter_by(id=audit_id, user_id=g.current_user['id']).first()
@@ -377,9 +379,11 @@ def upload_media_by_step_label(audit_id, step_label):
     if not step:
         step = AuditStep(
             audit_id=audit_id,
+            user_id=g.current_user['id'],
             label=step_label,
             step_type=step_type,
-            status="Processing"
+            status="Processing",
+            meta={"_auto_stub": True},  # Tag so create_or_update can identify media-created stubs
         )
         db.session.add(step)
         db.session.commit()
@@ -413,6 +417,7 @@ def upload_media_by_step_label(audit_id, step_label):
         # Save AuditMedia row
         media_row = AuditMedia(
             audit_id=audit_id,
+            user_id=g.current_user['id'],
             step_id=step.id,
             media_url=public_url,
             file_name=file.filename,
@@ -519,6 +524,7 @@ def delete_media(media_id):
     
 @bp.route('/steps/<int:step_id>/upload', methods=['POST'])
 @require_auth
+@idempotent
 def upload_media_by_step_id(step_id):
     """Upload photo or audio directly to a specific step_id"""
     

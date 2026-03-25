@@ -7,6 +7,7 @@ from memory import chat_memory as chatmem
 import logging
 from agents.base_agent import run_agent
 from agents.utils import merge_agent_outputs
+from utils.idempotency import idempotent
 
 # ----------------------------
 # Logging setup
@@ -134,7 +135,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 
     # --- Run all relevant agents ---
     agent_replies = []
-    domains = ["exterior", "insulation", "hvac"]
+    domains = ["exterior", "insulation", "hvac", "electrical"]
     for domain in domains:
         try:
             logger.info(f"⚙️ Running {domain} agent...")
@@ -159,6 +160,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 # ----------------------------
 @bp.route("/agent-review", methods=["POST"])
 @require_auth
+@idempotent
 def agent_review():
     """Primary endpoint for ReviewPage orchestration."""
     data = request.json or {}

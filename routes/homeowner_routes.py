@@ -92,6 +92,133 @@ def require_homeowner_auth(f):
     return decorated_function
 
 
+@bp.route('/homeowner/signup', methods=['POST', 'OPTIONS'])
+def homeowner_signup():
+    """
+    Self-service homeowner signup.
+
+    Creates a new Property and Audit for a homeowner who signs up
+    via the marketing site. Uses SELF_SERVICE_USER_ID env var as the
+    owning user_id (the auditor account that owns self-service leads).
+
+    Request body:
+    {
+        "street": "123 Main St",
+        "city": "San Diego",
+        "state": "CA",
+        "zip_code": "92101",
+        "phone_number": "555-123-4567",
+        "place_id": "ChIJ..."
+    }
+
+    Returns:
+    - 201 with JWT token on success
+    - 409 if google_place_id already exists (direct to login)
+    - 400 if missing/invalid parameters
+    - 500 if SELF_SERVICE_USER_ID not configured
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        self_service_user_id = os.environ.get('SELF_SERVICE_USER_ID')
+        if not self_service_user_id:
+            logging.error("SELF_SERVICE_USER_ID env var not set")
+            return jsonify({'error': 'Self-service signup not configured'}), 500
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body required'}), 400
+
+        street = data.get('street', '').strip()
+        city = data.get('city', '').strip()
+        state = data.get('state', '').strip()
+        zip_code = data.get('zip_code', '').strip()
+        phone_number = data.get('phone_number', '').strip()
+        place_id = data.get('place_id', '').strip()
+
+        if not street or not city or not state or not zip_code:
+            return jsonify({'error': 'Address fields (street, city, state, zip_code) are required'}), 400
+
+        if not phone_number:
+            return jsonify({'error': 'phone_number is required'}), 400
+
+        if not place_id:
+            return jsonify({'error': 'place_id is required'}), 400
+
+        normalized_phone = normalize_phone(phone_number)
+        if not normalized_phone:
+            return jsonify({'error': 'Invalid phone number format'}), 400
+
+        # Check for duplicate property by google_place_id
+        existing = Property.query.filter_by(google_place_id=place_id).first()
+        if existing:
+            return jsonify({
+                'error': 'A property with this address already exists. Please log in instead.',
+                'redirect': '/homeowner/login'
+            }), 409
+
+        # Create Property
+        new_property = Property(
+            user_id=self_service_user_id,
+            street=street,
+            city=city,
+            state=state,
+            zip_code=zip_code,
+            phone_number=normalized_phone,
+            google_place_id=place_id,
+            property_type='single_family',
+            signup_source='self_service'
+        )
+        db.session.add(new_property)
+        db.session.flush()  # Get the property ID
+
+        # Create Audit
+        new_audit = Audit(
+            user_id=self_service_user_id,
+            property_id=new_property.id,
+            audit_type='energy_audit'
+        )
+        db.session.add(new_audit)
+        db.session.commit()
+
+        # Generate homeowner JWT
+        token = generate_homeowner_token(new_property.id, normalized_phone)
+
+        # Send signup notification email (best-effort)
+        try:
+            from utils.email_utils import send_signup_notification
+            send_signup_notification(
+                street=street,
+                city=city,
+                state=state,
+                zip_code=zip_code,
+                phone=normalized_phone
+            )
+        except Exception as email_err:
+            logging.warning(f"Signup notification email failed: {email_err}")
+
+        logging.info(f"Homeowner signup success: property_id={new_property.id}")
+
+        return jsonify({
+            'access_token': token,
+            'token_type': 'bearer',
+            'expires_in': HOMEOWNER_JWT_EXPIRY_HOURS * 3600,
+            'property': {
+                'id': new_property.id,
+                'address': new_property.street,
+                'city': new_property.city,
+                'state': new_property.state,
+                'zip_code': new_property.zip_code
+            }
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Homeowner signup error: {e}")
+        return jsonify({'error': 'Signup failed'}), 500
+
+
 @bp.route('/homeowner/auth', methods=['POST'])
 def homeowner_auth():
     """
@@ -228,6 +355,10 @@ def homeowner_session():
             ).filter(EnphaseConnection.status.in_(['connected', 'sync_in_progress'])).first()
             if enphase_conn:
                 task_status['solar_data'] = 'completed'
+
+        # Solar opt-out overrides regardless of audit existence
+        if property.solar_opted_out:
+            task_status['solar_data'] = 'completed'
         
         return jsonify({
             'property': {
@@ -239,12 +370,34 @@ def homeowner_session():
                 # Include audit status if available
                 'has_audit': hasattr(property, 'audits') and len(property.audits) > 0
             },
+            'audit_id': audit.id if audit else None,
             'task_status': task_status
         }), 200
         
     except Exception as e:
         logging.error(f"Homeowner session error: {e}")
         return jsonify({'error': 'Failed to get session'}), 500
+
+
+@bp.route('/homeowner/solar/skip', methods=['POST'])
+@require_homeowner_auth
+def skip_solar():
+    """
+    Mark that the homeowner does not have solar panels.
+    Sets solar_opted_out=True so solar data is no longer required.
+    """
+    try:
+        property = Property.query.get(g.homeowner_property_id)
+        if not property:
+            return jsonify({'error': 'Property not found'}), 404
+
+        property.solar_opted_out = True
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Skip solar error: {e}")
+        return jsonify({'error': 'Failed to update solar preference'}), 500
 
 
 @bp.route('/homeowner/utility-bill', methods=['POST'])

@@ -183,6 +183,62 @@ class HVACSchema(BaseModel):
     )
     recommended_upgrades: List[str] = Field(default_factory=list)
 
+class ElectricalSchema(BaseModel):
+    panel_type: Optional[str] = Field(
+        default=None,
+        description="Electrical panel type (Circuit Breaker, Fuse Box, Sub-Panel, Unknown)",
+    )
+    panel_amperage: Optional[str] = Field(
+        default=None,
+        description="Panel amperage capacity (100A, 150A, 200A, 320A, 400A, Unknown)",
+    )
+    panel_condition: str = Field(
+        ...,
+        description="Overall panel condition (Good, Fair, Poor, Hazardous)",
+    )
+    panel_brand: Optional[str] = Field(
+        default=None,
+        description="Panel manufacturer/brand if visible (e.g. Square D, Siemens, GE, Murray)",
+    )
+    wiring_type: Optional[str] = Field(
+        default=None,
+        description="Predominant wiring type observed (Copper/Romex, Aluminum, Knob & Tube, BX/Armored, Unknown)",
+    )
+    grounding: Optional[str] = Field(
+        default=None,
+        description="Grounding status (Grounded, Ungrounded, Partial, Unknown)",
+    )
+    safety_issues: List[str] = Field(
+        default_factory=list,
+        description="List of observed electrical safety concerns (e.g. double-tapped breakers, Federal Pacific panel, scorching)",
+    )
+    solar_present: Optional[str] = Field(
+        default=None,
+        description="Whether a solar PV system is present (Yes, No, Unknown)",
+    )
+    solar_system_size: Optional[str] = Field(
+        default=None,
+        description="Approximate solar system size if visible (e.g. '5 kW', '< 3 kW')",
+    )
+    solar_panel_condition: Optional[str] = Field(
+        default=None,
+        description="Condition of solar panels if present (Good, Fair, Poor, Unknown)",
+    )
+    battery_storage: Optional[str] = Field(
+        default=None,
+        description="Whether battery storage is present (Yes, No, Unknown)",
+    )
+    battery_type: Optional[str] = Field(
+        default=None,
+        description="Battery brand/type if present (Tesla Powerwall, Enphase IQ, LG RESU, Generac PWRcell, Other, Unknown)",
+    )
+    summary: str = Field(
+        ...,
+        description="Concise narrative summary of electrical findings and recommendations",
+    )
+    recommended_upgrades: List[str] = Field(default_factory=list)
+
+
 class InsulationSchema(BaseModel):
     insulation_type: str
     thickness_inches: Optional[float] = Field(

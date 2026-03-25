@@ -98,11 +98,15 @@ def get_recommendations(audit_id):
     total_recs = AuditRecommendation.query.filter_by(audit_id=audit_id).count()
     if total_recs == 0:
         agent = OrchestratorAgent(audit_id)
-        saved = agent.generate_recommendations()
-        # If caller requested a source filter, apply it to the generated results before returning
+        agent.generate_recommendations()
+        # Re-query from DB after generation to avoid stale/deleted objects
+        q = AuditRecommendation.query.filter_by(audit_id=audit_id)
+        if not include_hidden:
+            q = q.filter_by(is_hidden=False)
         if source != "all":
-            saved = [r for r in saved if (getattr(r, 'source', None) or 'ai').lower() == source]
-        return jsonify([serialize_rec(r) for r in saved])
+            q = q.filter(AuditRecommendation.source == source)
+        fresh = q.all()
+        return jsonify([serialize_rec(r) for r in fresh])
 
     # Otherwise, load existing recommendations (respect hidden filter)
     # Build base query
