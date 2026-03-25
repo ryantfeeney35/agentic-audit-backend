@@ -135,7 +135,7 @@ def orchestration_agent(audit_id, context, from_user=False, bootstrap=False, use
 
     # --- Run all relevant agents ---
     agent_replies = []
-    domains = ["exterior", "insulation", "hvac"]
+    domains = ["exterior", "insulation", "hvac", "electrical"]
     for domain in domains:
         try:
             logger.info(f"⚙️ Running {domain} agent...")

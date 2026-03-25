@@ -216,7 +216,7 @@ class OrchestratorAgent:
         logger.info("📄 Context built (len=%d)", len(context))
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac", "interior"]:
+        for domain in ["insulation", "siding", "hvac", "interior", "electrical"]:
             logger.info("➡️ Dispatching bootstrap to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, context, bootstrap=True, audit_id=self.audit_id)
@@ -261,7 +261,7 @@ class OrchestratorAgent:
         agent_context = f"{memory_context}\n\nLatest user answer:\n{user_answer}"
 
         outputs = {}
-        for domain in ["insulation", "siding", "hvac", "interior"]:
+        for domain in ["insulation", "siding", "hvac", "interior", "electrical"]:
             logger.info("➡️ Dispatching follow-up to %s agent", domain)
             try:
                 outputs[domain] = run_agent(domain, agent_context, bootstrap=False, audit_id=self.audit_id)
@@ -294,7 +294,7 @@ class OrchestratorAgent:
         """Generate upgrade recommendations for the audit."""
         logger.info("🧮 Generating recommendations (audit_id=%s)", self.audit_id)
         # Run two ordered passes: (1) audio-only, (2) full-context AI (excluding audio).
-        domains = ["insulation", "siding", "hvac", "interior"]
+        domains = ["insulation", "siding", "hvac", "interior", "electrical"]
 
         # --- ROI-aware context scaffolding (minimal change)
         # Pull audit-level defaults and property sqft so ROI enrichment can run deterministically

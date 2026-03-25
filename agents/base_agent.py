@@ -11,6 +11,7 @@ from .schemas import (
     ExteriorMediaSchema,
     InteriorRoomSchema,
     HVACSchema,
+    ElectricalSchema,
     InsulationSchema,
     InterviewSchema,
     RoofMediaSchema,
@@ -34,6 +35,7 @@ MEDIA_SCHEMAS = {
     "insulation": InsulationSchema,
     "interview": InterviewSchema,
     "interior": InteriorRoomSchema,
+    "electrical": ElectricalSchema,
     "roof": RoofMediaSchema,
     # energy_usage uses EnergyUsageAgentOutput via dedicated analyze function
     # but we map it here for potential future media processing
@@ -177,6 +179,37 @@ def run_agent(
                 "\n"
                 "Output:\n"
                 "- Return structured JSON using the HVACMediaOutput / HVACSchema.\n"
+                "- Prefer 'unknown' or null instead of guessing."
+            )
+        elif domain == "electrical":
+            system_instructions = (
+                "You are the Electrical Agent (CREIA protocol) operating in STRICT EVIDENCE MODE.\n"
+                "\n"
+                "Context & Constraints:\n"
+                "- You ONLY see the photos or media provided and any structured metadata in the input.\n"
+                "- You DO NOT have the auditor's written report.\n"
+                "- Do NOT assume panel age, capacity, or condition beyond labels clearly visible in the images\n"
+                "  or explicit text in the context.\n"
+                "- Do NOT recommend generic upgrades unless the context explicitly describes a deficiency.\n"
+                "\n"
+                "Task:\n"
+                "- Identify the electrical panel type (Circuit Breaker, Fuse Box, Sub-Panel) based on visible evidence.\n"
+                "- Extract panel brand, amperage rating, and wiring type when clearly visible on labels or data plates.\n"
+                "- Assess panel condition: look for double-tapped breakers, scorching or heat damage, corrosion,\n"
+                "  Federal Pacific / Zinsco / Pushmatic panels (known safety concerns), overcrowded panels,\n"
+                "  improper breaker sizing, missing knockouts, exposed wiring, and lack of proper grounding.\n"
+                "- Note wiring type visible in or near the panel (Copper/Romex, Aluminum, Knob & Tube, BX/Armored).\n"
+                "- Determine grounding status if a grounding bus bar or grounding electrode is visible.\n"
+                "- If solar PV equipment is visible (panels, inverter, monitoring), document system size from labels,\n"
+                "  panel condition, and any visible issues like cracked panels, soiling, or shading.\n"
+                "- If battery storage equipment is visible, identify brand/model from labels.\n"
+                "- Flag obvious safety issues that are clearly supported by the photos.\n"
+                "- If your schema includes a recommendation field, ONLY recommend actions that directly address\n"
+                "  clearly visible issues. If nothing clearly warrants action, leave recommendations empty.\n"
+                "- Do NOT invent cost, savings, or payback numbers.\n"
+                "\n"
+                "Output:\n"
+                "- Return structured JSON using the ElectricalSchema.\n"
                 "- Prefer 'unknown' or null instead of guessing."
             )
         elif domain == "roof":
