@@ -1,7 +1,7 @@
-# ADR-004: SDG&E SFTP Ingestion via SFTP To Go
+# ADR-004: SDG&E SFTP Ingestion via Self-Hosted VPS
 
-**Status:** Accepted (supersedes AWS Transfer Family proposal)  
-**Date:** 2026-07-12 (revised 2026-07-13)  
+**Status:** Accepted (supersedes SFTP To Go / AWS Transfer Family proposals)  
+**Date:** 2026-07-12 (revised 2026-07-14)  
 **Decision makers:** Ryan Feeney  
 
 ## Context
@@ -17,12 +17,11 @@ pipeline that routes files into our Flask backend.
 
 ## Decision
 
-Use **SFTP To Go** (managed SFTP service backed by AWS S3) with its
-built-in **webhook notifications** to bridge files into the backend REST API.
+Use a **low-cost VPS** (~$4-6/month) running **OpenSSH** in SFTP-only chroot
+mode, with a **watcher script** that uploads received files directly to the
+backend via HTTP multipart POST.
 
-This replaces the original AWS Transfer Family + Lambda proposal, which
-required managing three AWS services (Transfer Family, S3, Lambda) and cost
-~$220/month at idle.
+This is the cheapest approach — no S3 dependency, no third-party SFTP SaaS.
 
 ### Architecture
 
@@ -30,32 +29,44 @@ required managing three AWS services (Transfer Family, S3, Lambda) and cost
 SDG&E SFTP push
       │
       ▼
-SFTP To Go (managed SFTP endpoint)
-      │  backed by AWS S3
-      ▼
-S3 storage (managed by SFTP To Go)
-  ├── prod/incoming/    ← SDG&E production pushes here
-  ├── prod/processed/   ← after successful ingestion
-  ├── prod/failed/      ← parser / route errors
-  ├── prod/unrecognized/← files that don't match known patterns
-  ├── test/incoming/    ← SDG&E QA pushes here
-  └── test/...          ← same structure as prod
+VPS (Hetzner/DigitalOcean/Vultr)
+  OpenSSH (chrooted SFTP-only)
       │
       ▼
-SFTP To Go webhook → POST /api/utility/sftp-ingest
-      │  Header: X-Ingest-Secret
+Local filesystem:
+  /srv/sftp/
+    ├── prod/incoming/    ← SDG&E production pushes here
+    ├── prod/processed/   ← after successful upload
+    ├── prod/failed/      ← upload errors
+    ├── test/incoming/    ← SDG&E QA pushes here
+    └── test/...          ← same structure as prod
+      │
       ▼
-Railway backend (downloads file via S3-compatible API)
+sftp_watcher.sh (inotifywait or cron)
+      │  POST /api/utility/sftp-ingest
+      │  Header: X-Ingest-Secret
+      │  Body: multipart/form-data (file + filename)
+      ▼
+Railway backend
 ```
 
 ### Components
 
 | Component | Purpose |
 |-----------|---------|
-| **SFTP To Go** | Managed SFTP server; SSH key auth; static IP; S3-backed storage |
-| **S3-compatible API** | Backend downloads files using boto3 with SFTP To Go S3 credentials |
-| **Webhook notification** | SFTP To Go fires webhook on file upload; sends file path to backend |
-| **Backend route** | `POST /api/utility/sftp-ingest` — downloads file via S3 API, routes to parser |
+| **VPS** | Hetzner CX22 (~$4/mo) or equivalent; runs OpenSSH + watcher |
+| **OpenSSH (chroot)** | SFTP-only, no shell; separate users per environment |
+| **sftp_watcher.sh** | Watches incoming dirs (inotifywait); POSTs files to backend |
+| **Backend route** | `POST /api/utility/sftp-ingest` — accepts multipart file upload or JSON webhook |
+
+### Watcher operation
+
+- `sftp_watcher.sh --watch` (systemd): uses `inotifywait` for near-real-time
+  detection of new files, then POSTs each file to the backend as a multipart
+  upload with `X-Ingest-Secret` header.
+- Falls back to cron mode (scan every 60s) if inotify-tools isn't available.
+- Files are moved to `processed/YYYY-MM-DD/` on success, `failed/YYYY-MM-DD/`
+  on error. Skips files modified in the last 10 seconds (still being written).
 
 ### File routing rules
 
@@ -63,48 +74,51 @@ Railway backend (downloads file via S3-compatible API)
 |---------|--------|
 | `*_SUBSCRIPTIONS_*.CSV` | `sdge_subscriptions.parse_subscription_csv()` |
 | `CEN_{H,D,C}_*.xml` | `green_button.parse_espi_atom_xml()` |
-| Other | Move to `unrecognized/`, log warning |
+| Other | Log warning, return `unrecognized` type |
 
 ### Split-file reassembly
 
 SDG&E splits large files with naming convention `..._XX-YY.xml` where
-XX = part number, YY = total parts. The backend buffers parts in S3 by
-transaction ID and triggers processing when all parts arrive. A 1-hour
-timeout handles missing parts (moved to `failed/`).
+XX = part number, YY = total parts. In direct-upload mode (no S3), split files
+are processed individually. S3-backed deployments (SFTP To Go, AWS) can buffer
+parts and reassemble.
 
 ### Security
 
 - SFTP: SSH key authentication only; no password auth.
-- IP whitelisting: SDG&E QA (161.209.96.0/24) and PROD (161.209.202.0/24) IPs whitelisted in SFTP To Go.
-- Webhook → backend: shared `X-Ingest-Secret` header validated by backend route.
-- S3 API access: credentials stored in Railway env vars (`SFTPTOGO_S3_*`); never committed to source.
-- No customer PII transits the webhook; it only sends the file path.
+- Chroot: each user is jailed to their own directory, forced `internal-sftp`.
+- IP restriction: UFW/iptables limits port 22 to SDG&E IPs (161.209.96.0/24, 161.209.202.0/24) + admin IP.
+- Watcher → backend: shared `X-Ingest-Secret` validated by backend route.
+- File content travels over HTTPS (TLS) from VPS to Railway.
+- OS hardening: unattended-upgrades, fail2ban recommended.
 
 ## Alternatives considered
 
 | Alternative | Reason rejected |
 |-------------|-----------------|
-| AWS Transfer Family + Lambda | ~$220/mo at idle; 3 services to manage; operational complexity |
+| SFTP To Go | $150/month — unnecessary cost for low volume |
+| AWS Transfer Family + Lambda | ~$220/mo at idle; 3 services to manage |
 | Self-hosted SFTP on Railway | Railway has no persistent TCP port; not supported |
-| AWS EC2 with vsftpd | Operational burden; no managed equivalent benefits |
-| S3 presigned upload URLs | SDG&E's system pushes via SFTP, not HTTP; incompatible |
-| Azure Blob + SFTP | No existing Azure footprint; adds vendor complexity |
-| Cheap VPS (Hetzner, DigitalOcean) | $5/mo but self-managed; no webhook integration; patching burden |
+| AWS EC2 with vsftpd | More expensive than a $5 VPS; same ops burden |
+| S3 presigned upload URLs | SDG&E pushes via SFTP, not HTTP; incompatible |
 
 ## Consequences
 
-- **Positive:** Fully managed SFTP with zero maintenance; built-in webhook eliminates Lambda; SSH key + IP whitelisting for SDG&E; S3-compatible API for file access; simpler architecture (one service vs three).
-- **Negative:** ~$150/mo fixed cost regardless of volume; vendor lock-in to SFTP To Go (mitigated by standard SFTP + S3 API).
-- **Costs:** SFTP To Go Launch plan ~$150/month (20 credentials, 100 GiB storage, webhook notifications, S3 API access). Expected volume is low (< 100 files/day, < 50 MB total).
+- **Positive:** Cheapest option (~$4-6/mo); full control; no S3 dependency; simple architecture; watcher script is easy to debug.
+- **Negative:** You manage OS updates, SSH patches, disk space, uptime. If VPS goes down, SDG&E file pushes fail (files are retried by SDG&E, but gap in data until VPS is restored).
+- **Costs:** ~$4-6/month for VPS. No other services required.
 
 ## Setup steps
 
-1. Sign up for SFTP To Go Launch plan.
-2. Create SFTP credentials for SDG&E: separate users for `prod/` and `test/` folders.
-3. Import SDG&E SSH public keys (`EDIX_MOD_RSA_PUB_KEY_QA.txt`, `EDIX_MOD_RSA_PUB_KEY_PROD.txt`).
-4. Create folder structure: `{prod,test}/{incoming,processed,failed,unrecognized}/`.
-5. Whitelist SDG&E IPs: QA `161.209.96.0/24`, PROD `161.209.202.0/24`.
-6. Configure webhook: URL = `https://<railway-host>/api/utility/sftp-ingest`, header `X-Ingest-Secret`.
-7. Copy S3 API credentials from SFTP To Go dashboard → set Railway env vars: `SFTPTOGO_S3_ACCESS_KEY_ID`, `SFTPTOGO_S3_SECRET_ACCESS_KEY`, `SFTPTOGO_S3_ENDPOINT`, `SFTPTOGO_S3_BUCKET`.
-8. Set `SFTP_INGEST_SECRET` in Railway env (must match webhook header value).
-9. Provide SDG&E with: SFTP hostname, port 22, SSH usernames for prod and test.
+1. Provision a VPS (Hetzner CX22 recommended, ~$4/mo).
+2. Run `setup_sftp_vps.sh` on the VPS (creates users, configures chroot, installs watcher).
+3. Import SDG&E SSH public keys (`EDIX_MOD_RSA_PUB_KEY_QA.txt` → `sdge-test`, `EDIX_MOD_RSA_PUB_KEY_PROD.txt` → `sdge-prod`).
+4. Edit `/etc/sftp-watcher/env` with `BACKEND_URL` and `INGEST_SECRET`.
+5. Start watcher: `systemctl enable --now sftp-watcher`
+6. Set `SFTP_INGEST_SECRET` in Railway env (must match VPS watcher value).
+7. Provide SDG&E with: VPS hostname/IP, port 22, usernames (`sdge-prod`, `sdge-test`).
+
+## Scripts
+
+- `backend/infra/sftp-vps/setup_sftp_vps.sh` — VPS bootstrap (users, chroot, systemd)
+- `backend/infra/sftp-vps/sftp_watcher.sh` — File watcher / uploader

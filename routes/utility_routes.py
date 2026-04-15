@@ -1079,11 +1079,14 @@ def _get_storage_client():
 @utility_bp.route('/sftp-ingest', methods=['POST'])
 def sftp_ingest():
     """
-    Receive file-arrival webhook from SFTP To Go (or compatible source).
+    Receive file-arrival notification or direct file upload.
 
-    Accepts two body formats:
-      1. SFTP To Go webhook:  { path, action, ... }
-      2. Legacy S3 event:     { s3_key, bucket, ... }
+    Accepts three modes:
+      1. Direct file upload:  multipart form with 'file' field + 'filename' field
+         (used by VPS watcher script — file content in request body, no S3 needed)
+      2. Webhook notification: JSON { path, action, ... }
+         (used by SFTP To Go or similar — file fetched from S3-compatible storage)
+      3. Legacy S3 event:      JSON { s3_key, bucket, ... }
 
     Authenticated via X-Ingest-Secret header (shared secret).
     """
@@ -1100,6 +1103,26 @@ def sftp_ingest():
         logger.warning("SFTP ingest request with invalid secret")
         return jsonify({'error': 'Unauthorized'}), 401
 
+    # --- Mode 1: Direct file upload (multipart form) ---
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        uploaded = request.files.get('file')
+        if not uploaded:
+            return jsonify({'error': 'Missing file in multipart upload'}), 400
+
+        filename = request.form.get('filename') or uploaded.filename or ''
+        if not filename:
+            return jsonify({'error': 'Missing filename'}), 400
+
+        try:
+            file_content = uploaded.read().decode('utf-8')
+            logger.info("SFTP ingest received (direct upload): filename=%s", filename)
+            result = _route_sftp_file(filename, file_content, s3=None, bucket=None, s3_key=None)
+            return jsonify(result), 200
+        except Exception as e:
+            logger.exception("SFTP ingest error for direct upload %s: %s", filename, e)
+            return jsonify({'error': str(e)}), 500
+
+    # --- Mode 2 & 3: JSON webhook / S3 event ---
     data = request.get_json(silent=True)
     if not data:
         return jsonify({'error': 'Missing JSON body'}), 400
@@ -1142,7 +1165,10 @@ def sftp_ingest():
 
 
 def _route_sftp_file(filename: str, content: str, s3, bucket: str, s3_key: str):
-    """Route an SFTP file to the appropriate parser based on filename."""
+    """Route an SFTP file to the appropriate parser based on filename.
+
+    When s3/bucket/s3_key are None (direct upload mode), S3 archival is skipped.
+    """
     from utils.green_button import parse_espi_atom_xml, parse_espi_filename, parse_espi_multi_usage_points
     from utils.sdge_subscriptions import parse_subscription_csv, process_subscription_records
 
@@ -1152,7 +1178,8 @@ def _route_sftp_file(filename: str, content: str, s3, bucket: str, s3_key: str):
         # --- Subscription CSV ---
         records = parse_subscription_csv(content)
         summary = process_subscription_records(records)
-        _move_s3_file(s3, bucket, s3_key, 'processed/')
+        if s3 and bucket and s3_key:
+            _move_s3_file(s3, bucket, s3_key, 'processed/')
         return {'type': 'subscription_csv', 'filename': filename, 'summary': summary}
 
     parsed_name = parse_espi_filename(filename)
@@ -1160,16 +1187,23 @@ def _route_sftp_file(filename: str, content: str, s3, bucket: str, s3_key: str):
         # --- ESPI XML ---
         # Check for split files
         if parsed_name['split_total'] > 1:
+            if not s3 or not bucket:
+                # Split-file reassembly requires S3 — fall back to processing as single
+                logger.warning("Split file received via direct upload; processing as single file")
+                result = _process_espi_file(parsed_name, content)
+                return {'type': 'espi_xml', 'filename': filename, **result}
             return _handle_split_file(parsed_name, content, s3, bucket, s3_key)
 
         # Single file (or 01-01 split)
         result = _process_espi_file(parsed_name, content)
-        _move_s3_file(s3, bucket, s3_key, 'processed/')
+        if s3 and bucket and s3_key:
+            _move_s3_file(s3, bucket, s3_key, 'processed/')
         return {'type': 'espi_xml', 'filename': filename, **result}
 
     # Unrecognized
     logger.warning("Unrecognized SFTP file: %s", filename)
-    _move_s3_file(s3, bucket, s3_key, 'unrecognized/')
+    if s3 and bucket and s3_key:
+        _move_s3_file(s3, bucket, s3_key, 'unrecognized/')
     return {'type': 'unrecognized', 'filename': filename}
 
 

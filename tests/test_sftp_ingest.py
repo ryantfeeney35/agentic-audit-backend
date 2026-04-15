@@ -135,6 +135,67 @@ class TestSFTPIngest:
         call_args = mock_s3.get_object.call_args
         assert call_args[1]["Key"] == "prod/SUSTAINRGY_SUBSCRIPTIONS_20260201.CSV"
 
+    def test_direct_upload_subscription_csv(self, client, ctx):
+        """VPS watcher sends file as multipart form upload."""
+        import io
+        csv_content = b"CE,COK3,9999,GRP,MTR,a@b.com,,TOU\n"
+        data = {
+            "file": (io.BytesIO(csv_content), "SUSTAINRGY_SUBSCRIPTIONS_20260301.CSV"),
+            "filename": "SUSTAINRGY_SUBSCRIPTIONS_20260301.CSV",
+        }
+        res = client.post(
+            "/api/utility/sftp-ingest",
+            data=data,
+            content_type="multipart/form-data",
+            headers={"X-Ingest-Secret": "test-secret-123"},
+        )
+        assert res.status_code == 200
+        result = res.get_json()
+        assert result["type"] == "subscription_csv"
+        assert result["summary"]["enrolled"] == 1
+
+    def test_direct_upload_unrecognized_file(self, client, ctx):
+        """VPS watcher sends an unrecognized file via multipart upload."""
+        import io
+        data = {
+            "file": (io.BytesIO(b"some random data"), "random_file.dat"),
+            "filename": "random_file.dat",
+        }
+        res = client.post(
+            "/api/utility/sftp-ingest",
+            data=data,
+            content_type="multipart/form-data",
+            headers={"X-Ingest-Secret": "test-secret-123"},
+        )
+        assert res.status_code == 200
+        result = res.get_json()
+        assert result["type"] == "unrecognized"
+
+    def test_direct_upload_missing_file_returns_400(self, client):
+        """Multipart request without a file field should return 400."""
+        res = client.post(
+            "/api/utility/sftp-ingest",
+            data={"filename": "test.csv"},
+            content_type="multipart/form-data",
+            headers={"X-Ingest-Secret": "test-secret-123"},
+        )
+        assert res.status_code == 400
+        assert "file" in res.get_json()["error"].lower()
+
+    def test_direct_upload_requires_auth(self, client):
+        """Multipart upload without secret should return 401."""
+        import io
+        data = {
+            "file": (io.BytesIO(b"data"), "test.csv"),
+            "filename": "test.csv",
+        }
+        res = client.post(
+            "/api/utility/sftp-ingest",
+            data=data,
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 401
+
 
 # ---------------------------------------------------------------------------
 # Data Notify route (Group 7)
