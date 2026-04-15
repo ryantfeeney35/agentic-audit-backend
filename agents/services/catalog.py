@@ -72,8 +72,14 @@ class CostFormula(BaseModel):
         if self.type == "tiered_per_sqft":
             return self._calculate_tiered(area_sqft)
 
+        if self.type == "range":
+            # Return midpoint of min/max range when both are available
+            if self.min_cost is not None and self.max_cost is not None:
+                return round((self.min_cost + self.max_cost) / 2, 2)
+            return self.min_cost or self.max_cost
+
         if self.type != "per_sqft":
-            # Non-per_sqft types (range, fixed, ppa) can't be calculated from area
+            # Non-per_sqft types (fixed, ppa) can't be calculated from area alone
             return None
         
         if self.base_cost_per_sqft is None:
@@ -150,7 +156,9 @@ class ServiceEntry(BaseModel):
                 calc_area = property_sqft * multiplier
             
             if calc_area is not None and calc_area > 0:
-                return self.cost_formula.calculate(calc_area)
+                result = self.cost_formula.calculate(calc_area)
+                if result is not None:
+                    return result
         
         # Fallback to static estimated_cost_usd
         return self.estimated_cost_usd

@@ -144,7 +144,20 @@ def _enrich_insulation(recs: List[Recommendation], context: dict) -> List[Recomm
         )
         
         if r.step_type != StepType.INSULATION or not is_attic:
-            logger.info("🧮 Skipping: not attic insulation (step_type=%s, is_attic=%s)", r.step_type, is_attic)
+            logger.info("🧮 Skipping full ROI: not attic insulation (step_type=%s, is_attic=%s)", r.step_type, is_attic)
+            # For non-attic insulation recs, still try to populate upgrade_cost_usd from catalog
+            if r.step_type == StepType.INSULATION and new_r.upgrade_cost_usd is None:
+                service_id = getattr(r, "service_id", None)
+                catalog_cost = _get_cost_from_catalog(
+                    service_id=service_id,
+                    summary=r.summary,
+                    step_type="insulation",
+                    area_sqft=area_sqft,
+                    property_sqft=property_sqft,
+                )
+                if catalog_cost is not None:
+                    new_r = new_r.model_copy(update={"upgrade_cost_usd": catalog_cost})
+                    logger.info("🧮 Populated catalog cost for non-attic rec: $%.2f", catalog_cost)
             out.append(new_r)
             continue
 
