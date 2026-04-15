@@ -33,10 +33,8 @@ class ProviderRegistry:
     
     # Waterfall chains by utility name
     # Order matters: first available provider that succeeds is used
-    # NOTE: sdge_cmd temporarily removed from SDGE chain until direct CMD access is configured
-    # TODO: Restore to ["sdge_cmd", "utilityapi", "manual"] once SDGE Green Button access is approved
     WATERFALL_CHAINS: Dict[str, List[str]] = {
-        "SDGE": ["utilityapi", "manual"],  # Using UtilityAPI until CMD is set up
+        "SDGE": ["sdge_cmd", "utilityapi", "manual"],
         "PGE": ["utilityapi", "manual"],
         "SCE": ["utilityapi", "manual"],
         "LADWP": ["utilityapi", "manual"],
@@ -44,9 +42,8 @@ class ProviderRegistry:
     }
     
     # Supported utilities for UI display
-    # NOTE: direct_cmd set to False for SDGE until Green Button CMD access is approved
     SUPPORTED_UTILITIES = [
-        {"name": "SDGE", "display_name": "San Diego Gas & Electric", "direct_cmd": False},
+        {"name": "SDGE", "display_name": "San Diego Gas & Electric", "direct_cmd": True},
         {"name": "PGE", "display_name": "Pacific Gas & Electric", "direct_cmd": False},
         {"name": "SCE", "display_name": "Southern California Edison", "direct_cmd": False},
         {"name": "LADWP", "display_name": "Los Angeles DWP", "direct_cmd": False},

@@ -1,6 +1,6 @@
 {
-  "version": "1.1",
-  "last_updated": "2026-02-17",
+  "version": "1.2",
+  "last_updated": "2026-04-14",
   "services": [
     {
       "id": "home-efficiency-insulation-attic-install",
@@ -54,6 +54,104 @@
       "keywords": ["repair attic insulation", "fix attic insulation", "attic insulation repair"]
     },
     {
+      "id": "home-efficiency-insulation-attic-platinum-protection",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": "Attic",
+      "action": "Platinum Protection Plan",
+      "order_of_completion": 4,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "tiered_per_sqft",
+        "tiers": [
+          {"max_sqft": 1000, "cost_per_sqft": 7.80},
+          {"max_sqft": 1499, "cost_per_sqft": 6.80},
+          {"max_sqft": 1999, "cost_per_sqft": 5.96},
+          {"max_sqft": 2499, "cost_per_sqft": 5.57},
+          {"max_sqft": 2999, "cost_per_sqft": 5.36},
+          {"max_sqft": 3999, "cost_per_sqft": 5.00},
+          {"max_sqft": null, "cost_per_sqft": 4.85}
+        ],
+        "notes": "Removal of insulation, vacuum. Sanitize attic/crawlspace. Rodent proof structure. Quality control/inspection. Air seal attic. Install R38 fiberglass batting on attic floor. Install R19 fiberglass batting in rafters/gables/hip."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["platinum protection", "platinum plan", "full attic package", "rodent proof", "sanitize attic", "R38 attic floor", "R19 rafters", "R19 gables", "complete attic insulation"]
+    },
+    {
+      "id": "home-efficiency-insulation-attic-premium-protection",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": "Attic",
+      "action": "Premium Protection Plan",
+      "order_of_completion": 4,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "tiered_per_sqft",
+        "tiers": [
+          {"max_sqft": 1000, "cost_per_sqft": 5.90},
+          {"max_sqft": 1499, "cost_per_sqft": 5.38},
+          {"max_sqft": 1999, "cost_per_sqft": 4.65},
+          {"max_sqft": 2499, "cost_per_sqft": 4.45},
+          {"max_sqft": 2999, "cost_per_sqft": 4.29},
+          {"max_sqft": 3999, "cost_per_sqft": 4.08},
+          {"max_sqft": null, "cost_per_sqft": 3.85}
+        ],
+        "notes": "Removal of insulation, vacuum. Sanitize attic/crawlspace. Rodent proof structure. Quality control/inspection. Air seal attic. Install R38 fiberglass batting on attic floor."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["premium protection", "premium plan", "attic sanitize", "rodent proof", "R38 attic floor", "air seal attic", "attic insulation package"]
+    },
+    {
+      "id": "home-efficiency-insulation-attic-gold-protection",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": "Attic",
+      "action": "Gold Protection Plan",
+      "order_of_completion": 4,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "tiered_per_sqft",
+        "tiers": [
+          {"max_sqft": 1000, "cost_per_sqft": 4.47},
+          {"max_sqft": 1499, "cost_per_sqft": 4.32},
+          {"max_sqft": 1999, "cost_per_sqft": 4.18},
+          {"max_sqft": 2499, "cost_per_sqft": 4.08},
+          {"max_sqft": 2999, "cost_per_sqft": 3.83},
+          {"max_sqft": 3999, "cost_per_sqft": 3.66},
+          {"max_sqft": null, "cost_per_sqft": 3.42}
+        ],
+        "notes": "Removal of insulation, vacuum. Air seal attic. Install R38 fiberglass batting on attic floor."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["gold protection", "gold plan", "attic removal", "air seal attic", "R38 attic floor", "basic attic insulation"]
+    },
+    {
+      "id": "home-efficiency-insulation-attic-r38-install-only",
+      "category": "Home Efficiency",
+      "sub_category": "Insulation",
+      "sub_category_detail": "Attic",
+      "action": "Install Only R38",
+      "order_of_completion": 4,
+      "estimated_cost_usd": null,
+      "cost_formula": {
+        "type": "tiered_per_sqft",
+        "tiers": [
+          {"max_sqft": 1000, "cost_per_sqft": 2.90},
+          {"max_sqft": 1499, "cost_per_sqft": 3.10},
+          {"max_sqft": 2500, "cost_per_sqft": 2.64},
+          {"max_sqft": 3500, "cost_per_sqft": 2.49},
+          {"max_sqft": null, "cost_per_sqft": 2.28}
+        ],
+        "notes": "Install only — R38 fiberglass batting on attic floor. No removal or air sealing included."
+      },
+      "estimated_kwh_savings": null,
+      "rebate_eligible": false,
+      "keywords": ["install only", "R38 install", "attic insulation install", "R38 batting", "fiberglass install only"]
+    },
+    {
       "id": "home-efficiency-air-sealing-attic-install",
       "category": "Home Efficiency",
       "sub_category": "Air Sealing",
@@ -81,15 +179,15 @@
       "estimated_cost_usd": null,
       "cost_formula": {
         "type": "per_sqft",
-        "base_cost_per_sqft": 2.50,
+        "base_cost_per_sqft": 4.40,
         "min_cost": 1500,
         "max_cost": 8000,
         "sqft_multiplier": 0.40,
-        "notes": "Blown-in cellular wall insulation. sqft_multiplier converts property sqft to estimated wall area."
+        "notes": "Open cell foam injection (insulate and air seal). Retail $4.40/ft, wholesale $4.00/ft. sqft_multiplier converts property sqft to estimated wall area."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["wall insulation", "install wall insulation", "add wall insulation", "blow-in wall", "blown-in cellular"]
+      "keywords": ["wall insulation", "install wall insulation", "add wall insulation", "blow-in wall", "blown-in cellular", "open cell foam", "foam injection", "wall air seal"]
     },
     {
       "id": "home-efficiency-insulation-crawlspace-install",
@@ -101,15 +199,15 @@
       "estimated_cost_usd": null,
       "cost_formula": {
         "type": "per_sqft",
-        "base_cost_per_sqft": 2.00,
+        "base_cost_per_sqft": 2.15,
         "min_cost": 800,
         "max_cost": 5000,
         "sqft_multiplier": 0.50,
-        "notes": "Air seal crawlspace. sqft_multiplier: crawlspace typically 50% of footprint for single-story."
+        "notes": "R19 fiberglass batting. Retail $2.15/ft. sqft_multiplier: crawlspace typically 50% of footprint for single-story."
       },
       "estimated_kwh_savings": null,
       "rebate_eligible": false,
-      "keywords": ["crawlspace insulation", "crawl space insulation", "install crawlspace", "underfloor insulation", "air seal"]
+      "keywords": ["crawlspace insulation", "crawl space insulation", "install crawlspace", "underfloor insulation", "R19 batting", "crawlspace batting"]
     },
     {
       "id": "home-efficiency-insulation-repair",

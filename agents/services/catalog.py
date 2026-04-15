@@ -20,15 +20,31 @@ logger = logging.getLogger(__name__)
 DEFAULT_CATALOG_PATH = Path(__file__).parent.parent.parent / "data" / "service_catalog.json"
 
 
+class PriceTier(BaseModel):
+    """A single tier in a tiered pricing schedule."""
+
+    max_sqft: Optional[int] = Field(
+        default=None,
+        description="Upper bound of sqft for this tier (inclusive). None means unlimited (the 'and up' tier).",
+    )
+    cost_per_sqft: float = Field(
+        ..., gt=0, description="Price per square foot for this tier"
+    )
+
+
 class CostFormula(BaseModel):
     """Formula for calculating estimated cost based on square footage or other inputs."""
 
     type: str = Field(
         default="per_sqft",
-        description="Formula type: 'per_sqft', 'range', 'fixed', 'ppa'",
+        description="Formula type: 'per_sqft', 'tiered_per_sqft', 'range', 'fixed', 'ppa'",
     )
     base_cost_per_sqft: Optional[float] = Field(
         default=None, gt=0, description="Cost per square foot for per_sqft type upgrades"
+    )
+    tiers: Optional[List[PriceTier]] = Field(
+        default=None,
+        description="Ordered list of price tiers for tiered_per_sqft type. Must be sorted by max_sqft ascending with the last tier having max_sqft=null.",
     )
     min_cost: Optional[float] = Field(
         default=None, description="Minimum cost floor (e.g., minimum service charge)"
@@ -51,8 +67,11 @@ class CostFormula(BaseModel):
             area_sqft: The applicable area in square feet (already adjusted if needed).
             
         Returns:
-            Estimated cost in USD, clamped to min/max bounds. None for non-per_sqft types.
+            Estimated cost in USD, clamped to min/max bounds. None for unsupported types.
         """
+        if self.type == "tiered_per_sqft":
+            return self._calculate_tiered(area_sqft)
+
         if self.type != "per_sqft":
             # Non-per_sqft types (range, fixed, ppa) can't be calculated from area
             return None
@@ -69,6 +88,23 @@ class CostFormula(BaseModel):
             raw_cost = min(raw_cost, self.max_cost)
         
         return round(raw_cost, 2)
+
+    def _calculate_tiered(self, area_sqft: float) -> Optional[float]:
+        """Look up the matching tier and compute total cost."""
+        if not self.tiers:
+            return None
+
+        for tier in self.tiers:
+            if tier.max_sqft is None or area_sqft <= tier.max_sqft:
+                raw_cost = tier.cost_per_sqft * area_sqft
+                if self.min_cost is not None:
+                    raw_cost = max(raw_cost, self.min_cost)
+                if self.max_cost is not None:
+                    raw_cost = min(raw_cost, self.max_cost)
+                return round(raw_cost, 2)
+
+        # Should not reach here if tiers are well-formed (last tier has max_sqft=None)
+        return None
 
 
 class ServiceEntry(BaseModel):

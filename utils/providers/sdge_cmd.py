@@ -72,9 +72,9 @@ class SDGECMDProvider(UtilityProvider):
     supported_utilities = ["SDGE"]
     
     # SDG&E CMD endpoints (defaults, overridable via env)
-    DEFAULT_BASE_URL = "https://api.sdge.com/greenbutton"
-    DEFAULT_AUTH_URL = "https://myaccount.sdge.com/portal/oauth/authorize"
-    DEFAULT_TOKEN_URL = "https://api.sdge.com/oauth/token"
+    DEFAULT_BASE_URL = "https://soagwx.sempra.com:3443/DataCustodian/espi/1_1/resource"
+    DEFAULT_AUTH_URL = "https://soagwx.sempra.com:3443/DataCustodian/oauth/authorize"
+    DEFAULT_TOKEN_URL = "https://soagwx.sempra.com:3443/DataCustodian/oauth/token"
     
     def __init__(self):
         """Initialize provider with credentials from environment."""
@@ -710,10 +710,34 @@ class SDGECMDProvider(UtilityProvider):
         # Construct default URI based on subscription
         subscription_id = metadata.get("subscription_id")
         if subscription_id:
-            return f"{self.base_url}/espi/1_1/resource/Subscription/{subscription_id}/UsagePoint"
+            return f"{self.base_url}/Subscription/{subscription_id}/UsagePoint"
         
         # Fallback to batch endpoint
-        return f"{self.base_url}/espi/1_1/resource/Batch/Subscription"
+        return f"{self.base_url}/Batch/Subscription"
+
+    def check_service_status(self) -> Dict[str, Any]:
+        """
+        Check SDG&E CMD service availability via ReadServiceStatus.
+        
+        Calls GET /ReadServiceStatus on the ESPI endpoint.
+        No authentication required for this health-check endpoint.
+        
+        Returns:
+            Dict with 'available' bool and optional 'status' or 'error' details.
+        """
+        url = f"{self.base_url}/ReadServiceStatus"
+        try:
+            response = requests.get(url, timeout=self.timeout)
+            if response.status_code == 200:
+                return {"available": True, "status": response.text[:500]}
+            return {
+                "available": False,
+                "status_code": response.status_code,
+                "error": response.text[:500],
+            }
+        except requests.RequestException as e:
+            logger.warning(f"SDG&E ReadServiceStatus check failed: {e}")
+            return {"available": False, "error": str(e)}
 
 
 # Export

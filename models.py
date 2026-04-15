@@ -277,6 +277,13 @@ class UtilityConnection(db.Model):
     # Sync timestamps
     last_sync_at = db.Column(db.DateTime, nullable=True)
     last_sync_error = db.Column(db.Text, nullable=True)
+    last_file_received_at = db.Column(db.DateTime, nullable=True)
+    
+    # SDG&E subscription metadata (populated from subscription CSV)
+    obfuscated_key = db.Column(db.String(255), nullable=True)
+    meter_number = db.Column(db.String(100), nullable=True)
+    rate_tariff = db.Column(db.String(100), nullable=True)
+    account_group = db.Column(db.String(100), nullable=True)
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
