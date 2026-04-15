@@ -15,6 +15,7 @@ Reference: https://www.naesb.org//ESPI.asp
 """
 
 import xml.etree.ElementTree as ET
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
@@ -193,13 +194,7 @@ def _parse_interval_reading(reading_elem: ET.Element) -> Optional[Dict[str, Any]
         quality = None
         quality_elem = reading_elem.find('espi:ReadingQuality/espi:quality', NAMESPACES)
         if quality_elem is not None and quality_elem.text:
-            quality_map = {
-                '0': 'measured',
-                '1': 'measured',
-                '7': 'estimated',
-                '8': 'estimated',
-            }
-            quality = quality_map.get(quality_elem.text, 'unknown')
+            quality = map_reading_quality(quality_elem.text)
         
         return {
             'start': start_dt.isoformat(),
@@ -504,6 +499,235 @@ def detect_data_quality_issues(summary: Dict[str, Any]) -> List[str]:
                     break
     
     return flags
+
+
+# ---------------------------------------------------------------------------
+# NAESB Reading Quality mapping (task 4.1)
+# ---------------------------------------------------------------------------
+
+# NAESB reading-quality codes per Green Button/ESPI standard
+READING_QUALITY_MAP = {
+    '0': 'measured',       # valid / no abnormality
+    '1': 'measured',       # validated
+    '7': 'estimated',      # manually estimated
+    '8': 'estimated',      # estimated using reference day
+    '9': 'estimated',      # estimated using linear interpolation
+    '10': 'estimated',     # questionable
+    '11': 'estimated',     # derived (calculated)
+    '12': 'projected',     # projected (forecast)
+    '13': 'estimated',     # mixed quality
+    '14': 'measured',      # raw
+    '15': 'measured',      # normalized for weather
+    '16': 'estimated',     # other
+    '17': 'estimated',     # billing-quality estimated
+    '18': 'measured',      # billing-quality validated
+    '19': 'measured',      # revenue-quality validated
+}
+
+
+def map_reading_quality(quality_code: str) -> str:
+    """Map NAESB ReadingQuality code to simple quality label."""
+    return READING_QUALITY_MAP.get(quality_code, 'unknown')
+
+
+# ---------------------------------------------------------------------------
+# Customer Obfuscated Key (COK) extraction (task 4.2)
+# ---------------------------------------------------------------------------
+
+def extract_customer_obfuscated_key(root: ET.Element) -> Optional[str]:
+    """
+    Extract the customer obfuscated key from RetailCustomer link hrefs.
+
+    SDG&E embeds the COK in Atom link hrefs like:
+        <link rel="related" href=".../RetailCustomer/12345"/>
+
+    Args:
+        root: Parsed XML root element.
+
+    Returns:
+        Obfuscated key string, or None if not found.
+    """
+    for link in root.findall('.//atom:link', NAMESPACES):
+        href = link.get('href', '')
+        if '/RetailCustomer/' in href:
+            # Last path segment is the COK
+            parts = href.rstrip('/').split('/')
+            if parts:
+                return parts[-1]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-UsagePoint support (task 4.3)
+# ---------------------------------------------------------------------------
+
+def parse_espi_multi_usage_points(xml_content: str) -> List[Dict[str, Any]]:
+    """
+    Parse ESPI XML that may contain multiple UsagePoints.
+
+    Returns one result dict per UsagePoint, each tagged with the
+    UsagePoint href/id and customer obfuscated key.
+
+    Args:
+        xml_content: Raw ESPI Atom/XML string.
+
+    Returns:
+        List of dicts, each matching the shape of parse_espi_atom_xml output
+        plus 'usage_point_id' and 'customer_obfuscated_key' keys.
+    """
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error("Failed to parse ESPI XML for multi-UsagePoint: %s", e)
+        return [{'error': f"XML parse error: {e}", 'intervals': [], 'billing_periods': []}]
+
+    cok = extract_customer_obfuscated_key(root)
+
+    # Collect all <entry> elements that contain a UsagePoint
+    entries = root.findall('.//atom:entry', NAMESPACES)
+    usage_point_entries = []
+    for entry in entries:
+        up = entry.find('.//espi:UsagePoint', NAMESPACES)
+        if up is not None:
+            usage_point_entries.append(entry)
+
+    if not usage_point_entries:
+        # Fallback: treat entire document as one UsagePoint
+        result = parse_espi_atom_xml(xml_content)
+        result['customer_obfuscated_key'] = cok
+        result['usage_point_id'] = None
+        return [result]
+
+    results = []
+    for idx, entry in enumerate(usage_point_entries):
+        # Extract UsagePoint ID from self link
+        up_id = None
+        for link in entry.findall('atom:link', NAMESPACES):
+            href = link.get('href', '')
+            if '/UsagePoint/' in href:
+                up_id = href.rstrip('/').split('/')[-1]
+                break
+
+        # Re-serialize the entry and parse it
+        entry_xml = ET.tostring(entry, encoding='unicode')
+        parsed = parse_espi_atom_xml(entry_xml)
+        parsed['usage_point_id'] = up_id
+        parsed['customer_obfuscated_key'] = cok
+        results.append(parsed)
+
+    return results if results else [parse_espi_atom_xml(xml_content)]
+
+
+# ---------------------------------------------------------------------------
+# LocalTimeParameters parsing (task 4.4)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LocalTimeParameters:
+    """DST and timezone info from ESPI LocalTimeParameters."""
+    dst_offset: int = 0       # seconds
+    tz_offset: int = 0        # seconds from UTC
+    dst_start_rule: Optional[str] = None
+    dst_end_rule: Optional[str] = None
+
+
+def parse_local_time_parameters(root: ET.Element) -> Optional[LocalTimeParameters]:
+    """
+    Extract LocalTimeParameters from an ESPI feed.
+
+    Args:
+        root: Parsed XML root element.
+
+    Returns:
+        LocalTimeParameters dataclass, or None if not present.
+    """
+    ltp = root.find('.//espi:LocalTimeParameters', NAMESPACES)
+    if ltp is None:
+        return None
+
+    dst_offset_el = ltp.find('espi:dstOffset', NAMESPACES)
+    tz_offset_el = ltp.find('espi:tzOffset', NAMESPACES)
+    dst_start_el = ltp.find('espi:dstStartRule', NAMESPACES)
+    dst_end_el = ltp.find('espi:dstEndRule', NAMESPACES)
+
+    return LocalTimeParameters(
+        dst_offset=int(dst_offset_el.text) if dst_offset_el is not None and dst_offset_el.text else 0,
+        tz_offset=int(tz_offset_el.text) if tz_offset_el is not None and tz_offset_el.text else 0,
+        dst_start_rule=dst_start_el.text if dst_start_el is not None else None,
+        dst_end_rule=dst_end_el.text if dst_end_el is not None else None,
+    )
+
+
+def convert_interval_to_utc(
+    interval: Dict[str, Any],
+    local_time_params: Optional[LocalTimeParameters],
+) -> Dict[str, Any]:
+    """
+    Adjust an interval's start timestamp from local time to UTC using
+    LocalTimeParameters.  If no params are available, the interval is
+    returned unchanged (assumed to already be in UTC).
+    """
+    if local_time_params is None:
+        return interval
+
+    start_iso = interval.get('start')
+    if not start_iso:
+        return interval
+
+    start_dt = datetime.fromisoformat(start_iso)
+    # Subtract the timezone offset (which represents local→UTC delta)
+    utc_dt = start_dt - timedelta(seconds=local_time_params.tz_offset)
+    interval = dict(interval)
+    interval['start'] = utc_dt.isoformat()
+    return interval
+
+
+# ---------------------------------------------------------------------------
+# ESPI file naming convention parser (task 4.5)
+# ---------------------------------------------------------------------------
+
+_ESPI_FILENAME_RE = re.compile(
+    r'^CEN_'
+    r'(?P<job_type>[HDC])_'                    # H=historical, D=daily, C=correction
+    r'(?P<tp_name>[^_]+)_'                     # third-party name
+    r'(?P<tp_id>[^_]+)_'                       # third-party numeric ID
+    r'CONSUMPTION_'
+    r'(?P<exec_date>\d{8})_'                   # execution date YYYYMMDD
+    r'(?P<txn_id>\d{14})_'                     # transaction ID MMDDYYYYHHmmSS
+    r'ESPI(?P<espi_major>\d+)-(?P<espi_minor>\d+)_'  # ESPI version e.g. 2-1
+    r'(?P<split_pos>\d+)-(?P<split_total>\d+)' # split position XX-YY
+    r'\.xml$',
+    re.IGNORECASE,
+)
+
+
+def parse_espi_filename(filename: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse an SDG&E ESPI filename into its components.
+
+    Expected format:
+        CEN_{H|D|C}_NAME_NAMEID_CONSUMPTION_YYYYMMDD_MMDDYYYYHHMMSS_ESPI2-1_XX-YY.xml
+
+    Args:
+        filename: Basename of the ESPI XML file.
+
+    Returns:
+        Dict with parsed components, or None if the filename doesn't match.
+    """
+    m = _ESPI_FILENAME_RE.match(filename)
+    if not m:
+        return None
+
+    return {
+        'job_type': m.group('job_type').upper(),   # H, D, or C
+        'third_party_name': m.group('tp_name'),
+        'third_party_id': m.group('tp_id'),
+        'execution_date': m.group('exec_date'),
+        'transaction_id': m.group('txn_id'),
+        'espi_version': f"{m.group('espi_major')}-{m.group('espi_minor')}",
+        'split_position': int(m.group('split_pos')),
+        'split_total': int(m.group('split_total')),
+    }
 
 
 def parse_aggregator_response(response_data: Dict[str, Any]) -> Dict[str, Any]:

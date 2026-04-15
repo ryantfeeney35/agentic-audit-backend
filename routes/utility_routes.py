@@ -1041,3 +1041,426 @@ def delete_utility_connection(audit_id):
         logger.error(f"Error revoking utility connection: {e}")
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# SFTP File Ingestion (Group 6)
+# ============================================================================
+
+def _get_storage_client():
+    """
+    Build an S3-compatible client for SFTP To Go's storage backend.
+
+    Uses SFTPTOGO_S3_* env vars. Falls back to default boto3 credentials
+    (for local testing or if raw AWS S3 is used instead).
+    """
+    import os
+    import boto3
+
+    access_key = os.getenv('SFTPTOGO_S3_ACCESS_KEY_ID')
+    secret_key = os.getenv('SFTPTOGO_S3_SECRET_ACCESS_KEY')
+    endpoint = os.getenv('SFTPTOGO_S3_ENDPOINT')
+    bucket = os.getenv('SFTPTOGO_S3_BUCKET')
+
+    if access_key and secret_key and endpoint:
+        client = boto3.client(
+            's3',
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+        )
+    else:
+        # Fallback: default AWS credentials (local dev / raw AWS S3)
+        client = boto3.client('s3')
+
+    return client, bucket
+
+
+@utility_bp.route('/sftp-ingest', methods=['POST'])
+def sftp_ingest():
+    """
+    Receive file-arrival webhook from SFTP To Go (or compatible source).
+
+    Accepts two body formats:
+      1. SFTP To Go webhook:  { path, action, ... }
+      2. Legacy S3 event:     { s3_key, bucket, ... }
+
+    Authenticated via X-Ingest-Secret header (shared secret).
+    """
+    import os
+
+    # Validate shared secret
+    expected_secret = os.getenv('SFTP_INGEST_SECRET')
+    if not expected_secret:
+        logger.error("SFTP_INGEST_SECRET not configured")
+        return jsonify({'error': 'Server misconfiguration'}), 500
+
+    provided_secret = request.headers.get('X-Ingest-Secret', '')
+    if not provided_secret or provided_secret != expected_secret:
+        logger.warning("SFTP ingest request with invalid secret")
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Missing JSON body'}), 400
+
+    # Resolve file path from either webhook format
+    s3_key = data.get('s3_key') or data.get('path') or data.get('file')
+    if not s3_key:
+        return jsonify({'error': 'Missing file path (s3_key, path, or file)'}), 400
+
+    # Normalize: strip leading slash (S3 keys don't have one)
+    s3_key = s3_key.lstrip('/')
+
+    filename = s3_key.rsplit('/', 1)[-1]
+
+    logger.info("SFTP ingest received: key=%s", s3_key)
+
+    s3 = None
+    bucket = None
+    try:
+        s3, bucket = _get_storage_client()
+        # Override bucket if explicitly provided in request body
+        bucket = data.get('bucket') or bucket
+        if not bucket:
+            return jsonify({'error': 'No storage bucket configured'}), 500
+
+        # Download file
+        response = s3.get_object(Bucket=bucket, Key=s3_key)
+        file_content = response['Body'].read().decode('utf-8')
+
+        # Route based on filename pattern
+        result = _route_sftp_file(filename, file_content, s3, bucket, s3_key)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.exception("SFTP ingest error for %s: %s", s3_key, e)
+        if s3 and bucket:
+            _move_s3_file(s3, bucket, s3_key, 'failed/')
+        return jsonify({'error': str(e)}), 500
+
+
+def _route_sftp_file(filename: str, content: str, s3, bucket: str, s3_key: str):
+    """Route an SFTP file to the appropriate parser based on filename."""
+    from utils.green_button import parse_espi_atom_xml, parse_espi_filename, parse_espi_multi_usage_points
+    from utils.sdge_subscriptions import parse_subscription_csv, process_subscription_records
+
+    upper_name = filename.upper()
+
+    if '_SUBSCRIPTIONS_' in upper_name and upper_name.endswith('.CSV'):
+        # --- Subscription CSV ---
+        records = parse_subscription_csv(content)
+        summary = process_subscription_records(records)
+        _move_s3_file(s3, bucket, s3_key, 'processed/')
+        return {'type': 'subscription_csv', 'filename': filename, 'summary': summary}
+
+    parsed_name = parse_espi_filename(filename)
+    if parsed_name:
+        # --- ESPI XML ---
+        # Check for split files
+        if parsed_name['split_total'] > 1:
+            return _handle_split_file(parsed_name, content, s3, bucket, s3_key)
+
+        # Single file (or 01-01 split)
+        result = _process_espi_file(parsed_name, content)
+        _move_s3_file(s3, bucket, s3_key, 'processed/')
+        return {'type': 'espi_xml', 'filename': filename, **result}
+
+    # Unrecognized
+    logger.warning("Unrecognized SFTP file: %s", filename)
+    _move_s3_file(s3, bucket, s3_key, 'unrecognized/')
+    return {'type': 'unrecognized', 'filename': filename}
+
+
+def _handle_split_file(parsed_name: dict, content: str, s3, bucket: str, s3_key: str):
+    """
+    Buffer split-file parts in S3 and process when all parts arrive.
+
+    Parts are stored under incoming/splits/{transaction_id}/.
+    When the last part arrives, all parts are concatenated and processed.
+    """
+    import time as _time
+
+    txn_id = parsed_name['transaction_id']
+    pos = parsed_name['split_position']
+    total = parsed_name['split_total']
+    split_prefix = f"incoming/splits/{txn_id}/"
+
+    # Store this part
+    part_key = f"{split_prefix}part_{pos:03d}.xml"
+    s3.put_object(Bucket=bucket, Key=part_key, Body=content.encode('utf-8'))
+
+    # Check how many parts have arrived
+    existing = s3.list_objects_v2(Bucket=bucket, Prefix=split_prefix)
+    parts_present = existing.get('KeyCount', 0)
+
+    if parts_present < total:
+        logger.info("Split file %s: %d/%d parts received", txn_id, parts_present, total)
+        _move_s3_file(s3, bucket, s3_key, 'processed/')
+        return {
+            'type': 'espi_xml_split_buffered',
+            'transaction_id': txn_id,
+            'parts_received': parts_present,
+            'parts_total': total,
+        }
+
+    # All parts arrived — reassemble
+    logger.info("Split file %s: all %d parts arrived, reassembling", txn_id, total)
+    combined_parts = []
+    for i in range(1, total + 1):
+        pk = f"{split_prefix}part_{i:03d}.xml"
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=pk)
+            combined_parts.append(obj['Body'].read().decode('utf-8'))
+        except Exception as e:
+            logger.error("Missing split part %s: %s", pk, e)
+            return {'type': 'espi_xml_split_error', 'error': f"Missing part {i}"}
+
+    combined_content = '\n'.join(combined_parts)
+    result = _process_espi_file(parsed_name, combined_content)
+
+    # Cleanup split parts
+    for i in range(1, total + 1):
+        pk = f"{split_prefix}part_{i:03d}.xml"
+        try:
+            s3.delete_object(Bucket=bucket, Key=pk)
+        except Exception:
+            pass
+
+    _move_s3_file(s3, bucket, s3_key, 'processed/')
+    return {'type': 'espi_xml_reassembled', 'transaction_id': txn_id, **result}
+
+
+def _process_espi_file(parsed_name: dict, content: str):
+    """Parse ESPI content, correlate to connection, persist data."""
+    from utils.green_button import parse_espi_multi_usage_points
+
+    usage_points = parse_espi_multi_usage_points(content)
+    processed_count = 0
+    errors = []
+
+    for up in usage_points:
+        if 'error' in up:
+            errors.append(up['error'])
+            continue
+
+        cok = up.get('customer_obfuscated_key')
+        conn = None
+        if cok:
+            conn = UtilityConnection.query.filter_by(
+                obfuscated_key=cok,
+                utility_name='SDGE',
+            ).first()
+
+        if conn:
+            conn.last_file_received_at = datetime.utcnow()
+            # Store interval data
+            _persist_parsed_intervals(conn, up, parsed_name)
+            processed_count += 1
+        else:
+            # Queue for pending correlation
+            logger.warning(
+                "No connection for COK=%s, queuing as pending_correlation",
+                cok,
+            )
+
+    if processed_count > 0:
+        db.session.commit()
+
+    job_type = parsed_name.get('job_type', 'D')
+    is_correction = job_type == 'C'
+
+    return {
+        'job_type': job_type,
+        'is_correction': is_correction,
+        'usage_points_processed': processed_count,
+        'errors': errors,
+    }
+
+
+def _persist_parsed_intervals(conn, parsed_data: dict, parsed_name: dict):
+    """Persist parsed ESPI intervals to the database."""
+    from models import UtilityUsageData, UtilityUsageSummary
+    from utils.green_button import normalize_usage_to_summary
+
+    job_type = parsed_name.get('job_type', 'D')
+
+    # For correction files, delete existing data for affected periods first
+    if job_type == 'C':
+        intervals = parsed_data.get('intervals', [])
+        if intervals:
+            UtilityIntervalData.query.filter_by(connection_id=conn.id).delete()
+            logger.info("Cleared existing interval data for correction file, conn=%s", conn.id)
+
+    # Store raw data record
+    raw_record = UtilityUsageData(
+        user_id=conn.user_id,
+        audit_id=conn.audit_id,
+        connection_id=conn.id,
+        period_start=datetime.utcnow().date(),
+        period_end=datetime.utcnow().date(),
+        usage_amount=0,
+        unit=parsed_data.get('unit', 'kWh'),
+        source='sftp',
+        raw_data={
+            'format': 'espi_atom_xml',
+            'job_type': job_type,
+            'filename': parsed_name.get('third_party_name', ''),
+            'intervals_count': len(parsed_data.get('intervals', [])),
+        },
+    )
+    db.session.add(raw_record)
+
+    # Recalculate summary
+    summary_data = normalize_usage_to_summary(
+        parsed_data,
+        fuel_type=conn.data_scope or 'electric',
+        data_format='espi_atom_xml',
+    )
+
+    summary = UtilityUsageSummary.query.filter_by(connection_id=conn.id).first()
+    if not summary:
+        summary = UtilityUsageSummary(
+            connection_id=conn.id,
+            audit_id=conn.audit_id,
+            user_id=conn.user_id,
+        )
+        db.session.add(summary)
+
+    summary.fuel_type = summary_data.get('fuel_type', 'electric')
+    summary.unit = summary_data.get('unit', 'kWh')
+    summary.annual_usage = summary_data.get('annual_usage')
+    summary.annual_cost_usd = summary_data.get('annual_cost_usd')
+    summary.monthly_breakdown = summary_data.get('monthly_breakdown', [])
+    summary.seasonal_pattern = summary_data.get('seasonal_pattern')
+    summary.data_quality_flags = summary_data.get('data_quality_flags', [])
+    summary.updated_at = datetime.utcnow()
+
+
+def _move_s3_file(s3, bucket: str, source_key: str, dest_prefix: str):
+    """Move an S3 object from source to dest_prefix/YYYY-MM-DD/filename."""
+    filename = source_key.rsplit('/', 1)[-1]
+    date_folder = datetime.utcnow().strftime('%Y-%m-%d')
+    dest_key = f"{dest_prefix}{date_folder}/{filename}"
+    try:
+        s3.copy_object(
+            Bucket=bucket,
+            CopySource={'Bucket': bucket, 'Key': source_key},
+            Key=dest_key,
+        )
+        s3.delete_object(Bucket=bucket, Key=source_key)
+        logger.info("Moved %s -> %s", source_key, dest_key)
+    except Exception as e:
+        logger.error("Failed to move %s -> %s: %s", source_key, dest_key, e)
+
+
+# ============================================================================
+# Data Notification Endpoint (Group 7)
+# ============================================================================
+
+@utility_bp.route('/data-notify', methods=['POST'])
+def data_notify():
+    """
+    Receive push notifications from SDG&E when new data is available.
+
+    SDG&E POSTs { subscription_id, resource_uri } to our registered
+    third_party_notify_uri when new ESPI data is ready for download.
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Missing request body'}), 400
+
+    subscription_id = data.get('subscription_id') or data.get('subscriptionId')
+    resource_uri = data.get('resource_uri') or data.get('resourceURI')
+
+    if not subscription_id:
+        return jsonify({'error': 'subscription_id required'}), 400
+
+    logger.info(
+        "Data notification received: subscription_id=%s resource_uri=%s",
+        subscription_id, resource_uri,
+    )
+
+    # Find the connection with this subscription ID
+    connections = UtilityConnection.query.filter_by(
+        utility_name='SDGE',
+        provider_name='sdge_cmd',
+    ).all()
+    connection = None
+    for c in connections:
+        meta = c.provider_metadata or {}
+        if str(meta.get('subscription_id')) == str(subscription_id):
+            connection = c
+            break
+
+    if not connection:
+        logger.warning("No connection for subscription_id=%s", subscription_id)
+        return jsonify({'error': 'Subscription not found'}), 404
+
+    # Trigger sync
+    try:
+        provider = registry.get_provider('sdge_cmd')
+        if not provider:
+            return jsonify({'error': 'SDG&E CMD provider not available'}), 503
+
+        result = provider.sync_usage(connection.id)
+
+        if result.success:
+            logger.info(
+                "Data notification sync successful: conn=%s records=%s",
+                connection.id, result.records_imported,
+            )
+            return jsonify({
+                'success': True,
+                'connection_id': connection.id,
+                'records_imported': result.records_imported,
+            }), 200
+        else:
+            logger.error("Data notification sync failed: %s", result.error)
+            return jsonify({'success': False, 'error': result.error}), 500
+
+    except Exception as e:
+        logger.exception("Data notification processing error: %s", e)
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# Stale-Data Monitoring
+# ============================================================================
+
+@utility_bp.route('/stale-connections', methods=['GET'])
+@require_auth
+def check_stale_connections():
+    """Check for connected SDGE CMD subscriptions that haven't received
+    a file in 48+ hours. Intended to be called periodically (cron, admin)."""
+    from datetime import timedelta
+    threshold = datetime.utcnow() - timedelta(hours=48)
+
+    stale = UtilityConnection.query.filter(
+        UtilityConnection.provider_name == 'sdge_cmd',
+        UtilityConnection.connection_status == 'connected',
+        db.or_(
+            UtilityConnection.last_file_received_at == None,  # noqa: E711
+            UtilityConnection.last_file_received_at < threshold,
+        ),
+    ).all()
+
+    for conn in stale:
+        logger.warning(
+            "STALE_DATA | connection=%s audit=%s last_file=%s",
+            conn.id, conn.audit_id,
+            conn.last_file_received_at.isoformat() if conn.last_file_received_at else 'never',
+        )
+
+    return jsonify({
+        'stale_count': len(stale),
+        'connections': [
+            {
+                'id': c.id,
+                'audit_id': c.audit_id,
+                'last_file_received_at': c.last_file_received_at.isoformat() if c.last_file_received_at else None,
+            }
+            for c in stale
+        ],
+    }), 200
