@@ -63,6 +63,11 @@ class Audit(db.Model):
     # values: "energy_audit", "home_inspection_energy_audit"
     # ROI defaults/settings at the audit level (e.g., energy_rate, climate, horizon)
     roi_defaults = db.Column(JSONB, default=dict)
+    # Supplemental Home Energy Score inputs entered by the auditor that aren't
+    # captured by the standard audit steps (bedrooms, stories, foundation,
+    # water heater, qualitative air leakage, window glazing, numeric HVAC
+    # efficiencies, etc.). Consumed by hpxml.mapper to build the HES model.
+    hes_inputs = db.Column(JSONB, default=dict)
 
     # Relationships
     user = relationship("User", back_populates="audits")
@@ -71,6 +76,7 @@ class Audit(db.Model):
     media = relationship("AuditMedia", back_populates="audit", cascade="all, delete-orphan")
     recommendations = relationship("AuditRecommendation", back_populates="audit", cascade="all, delete-orphan")
     room_measurements = relationship("RoomMeasurement", back_populates="audit", cascade="all, delete-orphan")
+    home_energy_scores = relationship("HomeEnergyScore", back_populates="audit", cascade="all, delete-orphan")
 class AuditStep(db.Model):
     __tablename__ = "audit_steps"
 
@@ -677,3 +683,50 @@ class IdempotencyKey(db.Model):
     status_code = db.Column(db.Integer, nullable=False)
     response_body = db.Column(db.Text, nullable=False)  # JSON-serialised response
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+class HomeEnergyScore(db.Model):
+    """A DOE Home Energy Score (HEScore) generation attempt + result for an audit.
+
+    One row per submission to the HEScore API.  Stores the generated HPXML, the
+    HEScore building id, the resulting score/label, and the raw API responses
+    for auditing and re-fetching the official label PDF.
+    """
+    __tablename__ = "home_energy_scores"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    audit_id = db.Column(db.Integer, db.ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
+
+    # Lifecycle: draft -> submitted -> scored -> error
+    status = db.Column(db.String(20), nullable=False, default="draft")
+    # HEScore's building identifier (returned by submit_address / submit_inputs)
+    hescore_building_id = db.Column(db.String(64), nullable=True)
+    assessment_type = db.Column(db.String(20), nullable=True)  # initial|final|qa|...
+
+    # Generated HPXML kept for traceability / re-submission
+    hpxml = db.Column(db.Text, nullable=True)
+
+    # Results
+    base_score = db.Column(db.Integer, nullable=True)        # 1..10
+    label_url = db.Column(db.String, nullable=True)          # official label PDF
+    raw_result = db.Column(JSONB, default=dict)              # retrieve_results payload
+    error_message = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    audit = relationship("Audit", back_populates="home_energy_scores")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "audit_id": self.audit_id,
+            "status": self.status,
+            "hescore_building_id": self.hescore_building_id,
+            "assessment_type": self.assessment_type,
+            "base_score": self.base_score,
+            "label_url": self.label_url,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

@@ -12,6 +12,7 @@ from .webhook_routes import webhook_bp
 from .measurement_routes import bp as measurement_bp
 from .enphase_routes import enphase_bp, audit_enphase_bp
 from .homeowner_routes import bp as homeowner_bp
+from .hpxml_routes import bp as hpxml_bp
 
 def register_blueprints(app):
     app.register_blueprint(auth_bp, url_prefix="/api")
@@ -24,6 +25,8 @@ def register_blueprints(app):
     app.register_blueprint(contractor_bp, url_prefix="/api")
     app.register_blueprint(report_bp, url_prefix="/api")
     app.register_blueprint(measurement_bp, url_prefix="/api")
+    # HPXML export + Home Energy Score routes
+    app.register_blueprint(hpxml_bp, url_prefix="/api")
     # Homeowner portal routes
     app.register_blueprint(homeowner_bp, url_prefix="/api")
     # Utility routes - note: utility_bp has its own prefix /api/utility
