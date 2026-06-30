@@ -19,3 +19,6 @@ rapidfuzz>=3.0.0
 sentry-sdk[flask]>=2.0.0
 numpy>=1.24.0
 numpy-financial>=1.0.0
+requests>=2.28.0
+# Optional: local HPXML -> Home Energy Score validation (Phase-0 spike + pre-submit checks)
+# hescore-hpxml>=2023.5.0
